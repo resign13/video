@@ -49,7 +49,6 @@ load_dotenv_if_present()
 
 BASE_URL = env_value("BASE_URL", "https://api.dealonhorizon.us")
 SEEDANCE2_BASE_URL = env_value("SEEDANCE2_BASE_URL", "https://api.xbyjs.top")
-SEEDANCE2_CHANNEL2_BASE_URL = env_value("SEEDANCE2_CHANNEL2_BASE_URL", "https://api.dopio.cyou")
 HANCAT_BASE_URL = env_value("HANCAT_BASE_URL", "https://img-api.xn--1ys141f4ks.com")
 GROK_IMAGINE_BASE_URL = env_value("GROK_IMAGINE_BASE_URL", "https://zexitongxue.com")
 LUXVID_BASE_URL = env_value("LUXVID_BASE_URL", "https://zcbservice.aizfw.cn/kyyReactApiServer")
@@ -60,7 +59,6 @@ LONGXIA_BASE_URL = env_value("LONGXIA_BASE_URL", "https://api.longxiaai.store")
 
 DEFAULT_API_KEY = env_value("DEFAULT_API_KEY")
 SEEDANCE2_API_KEY = env_value("SEEDANCE2_API_KEY")
-SEEDANCE2_CHANNEL2_API_KEY = env_value("SEEDANCE2_CHANNEL2_API_KEY")
 HANCAT_API_KEY = env_value("HANCAT_API_KEY")
 GROK_IMAGINE_API_KEY = env_value("GROK_IMAGINE_API_KEY")
 LUXVID_API_KEY = env_value("LUXVID_API_KEY")
@@ -80,7 +78,7 @@ CLEANUP_INTERVAL_SECONDS = 10 * 60
 SECONDS_OPTIONS = ["5", "10", "15"]
 
 PROMPT_RATIO_MODELS = {"seedance2", "jimeng-video-3.5-pro-12s", "sora-2-12s"}
-LOW_RES_ONLY_MODELS = {"LuxVid_video", "videos_stable_fast", "seedance2渠道2", "grok-imagine-video-1.5-preview"}
+LOW_RES_ONLY_MODELS = {"LuxVid_video", "videos_stable_fast", "grok-imagine-video-1.5-preview"}
 
 MODEL_MATRIX = {
     "veo3 fast": {
@@ -132,7 +130,6 @@ MODEL_MATRIX = {
 MODEL_OPTIONS = [
     {"label": "LuxVid_video", "value": "LuxVid_video"},
     {"label": "videos_stable_fast", "value": "videos_stable_fast"},
-    {"label": "seedance2渠道2", "value": "seedance2渠道2", "needs_api_key": True},
     {"label": "grok-imagine-video-1.5-preview", "value": "grok-imagine-video-1.5-preview"},
     {"label": "veo3.1-components", "value": "veo3.1-components"},
     {"label": "veo3.1-fast-components", "value": "veo3.1-fast-components"},
@@ -236,8 +233,6 @@ def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
         return "videos_stable"
     if model_family == "videos_stable_fast":
         return "videos_stable_fast"
-    if model_family == "seedance2渠道2":
-        return "seedance2"
     if model_family in ("veo3.1-components", "veo3.1-fast-components"):
         return "gemini-veo-3.1-generate-preview-ref-8s"
     if model_family == "grok-imagine-video-1.5-preview":
@@ -280,13 +275,6 @@ def get_backend_config(model_family: str):
             "api_key": LUXVID_API_KEY,
             "auth_mode": "bearer",
             "request_mode": "luxvid_videos_async",
-        }
-    if model_family == "seedance2渠道2":
-        return {
-            "api_base": SEEDANCE2_CHANNEL2_BASE_URL,
-            "api_key": SEEDANCE2_CHANNEL2_API_KEY,
-            "auth_mode": "x-api-key",
-            "request_mode": "go2api_channel2_async",
         }
     if model_family == "grok-imagine-video-1.5-preview":
         return {
@@ -364,8 +352,6 @@ def get_allowed_resolutions(model_family: str):
 def get_allowed_seconds(model_family: str):
     if model_family in ("LuxVid_video", "videos_stable_fast"):
         return ["15"]
-    if model_family == "seedance2渠道2":
-        return ["5", "8", "10"]
     if model_family == "grok-imagine-video-1.5-preview":
         return ["6", "10"]
     if model_family in ("veo3.1-components", "veo3.1-fast-components"):
@@ -514,29 +500,6 @@ class WebTaskRunner:
             data = response.json()
             if data.get("error"):
                 raise RuntimeError(str(data.get("error")))
-            return data.get("task_id") or data.get("id") or data.get("taskId")
-
-        if request_mode == "go2api_channel2_async":
-            image_refs = [process_image_to_data_url(Path(path)) for path in task["image_paths"][:9]]
-            payload = {
-                "channel": 2,
-                "model": "seedance2",
-                "prompt": task["prompt"],
-                "duration": int(str(task["seconds"])),
-                "aspect_ratio": task["aspect_ratio"],
-                "image_refs": image_refs,
-            }
-            headers["Content-Type"] = "application/json"
-            headers["Accept"] = "application/json"
-            response = self.request_with_retry(
-                "post",
-                f"{task['api_base']}/api/v1/generate",
-                headers=headers,
-                json=payload,
-                timeout=120,
-            )
-            response.raise_for_status()
-            data = response.json()
             return data.get("task_id") or data.get("id") or data.get("taskId")
 
         if request_mode == "grok_imagine_videos_async":
@@ -691,8 +654,6 @@ class WebTaskRunner:
         while True:
             if request_mode == "luxvid_videos_async":
                 poll_url = f"{task['api_base']}/v1/result/{remote_task_id}"
-            elif request_mode == "go2api_channel2_async":
-                poll_url = f"{task['api_base']}/api/v1/tasks/{remote_task_id}"
             elif request_mode in ("videos_async", "sora_vip3_multi_image", "longxia_videos_async", "grok_imagine_videos_async", "hancat_videos_async"):
                 poll_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
             else:
@@ -949,18 +910,12 @@ def create_task():
 
     model_id = build_model_id(model_family, aspect_ratio, resolution)
     backend = get_backend_config(model_family)
-    if model_family == "seedance2渠道2":
-        if not manual_api_key:
-            return jsonify({"error": "seedance2渠道2 需要填写 API Key"}), 400
-        backend = dict(backend)
-        backend["api_key"] = manual_api_key
     size_value = (
         ""
         if model_family in PROMPT_RATIO_MODELS
         or model_family in (
             "LuxVid_video",
             "videos_stable_fast",
-            "seedance2渠道2",
             "grok-imagine-video-1.5-preview",
             "veo3.1-components",
             "veo3.1-fast-components",

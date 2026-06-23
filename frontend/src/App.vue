@@ -281,7 +281,7 @@ onUnmounted(() => {
           <input
             v-model="form.api_key"
             type="password"
-            placeholder="填写 seedance2渠道2 API Key"
+            placeholder="填写 API Key"
           />
         </div>
 
