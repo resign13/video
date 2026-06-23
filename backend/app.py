@@ -1,5 +1,6 @@
 import base64
 import os
+import shutil
 import threading
 import time
 import uuid
@@ -74,6 +75,8 @@ TRANSIENT_REQUEST_RETRIES = 4
 DOWNLOAD_RETRIES = 3
 RETRY_SLEEP_SECONDS = 2
 MAX_REFERENCES = 9
+FILE_RETENTION_SECONDS = 5 * 60 * 60
+CLEANUP_INTERVAL_SECONDS = 10 * 60
 SECONDS_OPTIONS = ["5", "10", "15"]
 
 PROMPT_RATIO_MODELS = {"seedance2", "jimeng-video-3.5-pro-12s", "sora-2-12s"}
@@ -140,6 +143,10 @@ def ensure_dir(path: Path):
 
 def now_text():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def now_text_from_ts(ts: float):
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def short_now():
@@ -470,6 +477,8 @@ class WebTaskRunner:
                 remote_url=remote_url,
                 local_path=str(local_path),
                 duration_seconds=duration,
+                completed_ts=time.time(),
+                expires_at=now_text_from_ts(time.time() + FILE_RETENTION_SECONDS),
             )
             self.log(task_id, f"completed: {local_path.name}")
         except Exception as exc:
@@ -778,6 +787,55 @@ CORS(app)
 TASKS: Dict[str, dict] = {}
 TASK_LOCK = threading.Lock()
 RUNNER = WebTaskRunner(TASKS, TASK_LOCK)
+
+
+def safe_remove_path(path_value):
+    if not path_value:
+        return
+    path = Path(path_value)
+    try:
+        if path.is_file():
+            path.unlink(missing_ok=True)
+        elif path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+    except OSError:
+        pass
+
+
+def cleanup_expired_files_once():
+    cutoff = time.time() - FILE_RETENTION_SECONDS
+    expired_ids = []
+    with TASK_LOCK:
+        for task_id, task in list(TASKS.items()):
+            completed_ts = task.get("completed_ts")
+            created_ts = task.get("created_ts") or 0
+            if task.get("status") in {"completed", "failed"} and (completed_ts or created_ts) < cutoff:
+                expired_ids.append(task_id)
+                safe_remove_path(task.get("local_path"))
+                upload_parent = Path(task.get("image_paths", [""])[0]).parent if task.get("image_paths") else None
+                if upload_parent and str(upload_parent).startswith(str(UPLOAD_DIR)):
+                    safe_remove_path(upload_parent)
+        for task_id in expired_ids:
+            TASKS.pop(task_id, None)
+
+    for root in (OUTPUT_DIR, UPLOAD_DIR):
+        if not root.exists():
+            continue
+        for item in root.iterdir():
+            try:
+                if item.stat().st_mtime < cutoff:
+                    safe_remove_path(item)
+            except OSError:
+                pass
+
+
+def cleanup_loop():
+    while True:
+        cleanup_expired_files_once()
+        time.sleep(CLEANUP_INTERVAL_SECONDS)
+
+
+threading.Thread(target=cleanup_loop, daemon=True).start()
 
 
 @app.get("/api/health")

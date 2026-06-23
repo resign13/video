@@ -259,11 +259,7 @@ onUnmounted(() => {
           <p>多参考图工作台</p>
         </div>
       </div>
-      <div class="topbar-right">
-        <div class="path-box">Web 本地版</div>
-        <button class="ghost small">保存目录</button>
-        <button class="ghost small">打开目录</button>
-      </div>
+      <div class="topbar-right"></div>
     </header>
 
     <div class="workspace">
@@ -414,8 +410,7 @@ onUnmounted(() => {
 
             <div class="preview-actions">
               <button class="ghost small" :disabled="!selectedTask?.download_url" @click="openPreview(selectedTask)">播放</button>
-              <button class="ghost small" :disabled="!selectedTask?.download_url" @click="openPreview(selectedTask)">全屏</button>
-              <button class="ghost small" :disabled="!selectedTask?.download_url" @click="openDownload(selectedTask)">目录</button>
+              <button class="ghost small" :disabled="!selectedTask?.download_url" @click="openDownload(selectedTask)">下载</button>
             </div>
           </div>
         </div>

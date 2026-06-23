@@ -76,9 +76,7 @@ textarea {
 }
 
 .topbar-right {
-  display: flex;
-  align-items: center;
-  gap: 7px;
+  display: none;
 }
 
 .path-box {
@@ -95,7 +93,7 @@ textarea {
   grid-template-columns: 390px minmax(0, 1fr);
   gap: 7px;
   margin-top: 10px;
-  height: calc(100vh - 82px);
+  height: calc(100vh - 72px);
   overflow: hidden;
 }
 
@@ -408,7 +406,7 @@ input[type="file"] {
 
 .preview-actions {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 7px;
   margin-top: auto;
 }
@@ -597,7 +595,7 @@ input[type="file"] {
     display: none;
   }
   .workspace {
-    height: calc(100vh - 66px);
+    height: calc(100vh - 58px);
   }
   .image-slot {
     min-height: 58px;
