@@ -9,6 +9,8 @@ const errorText = ref('')
 const filesInput = ref(null)
 const selectedTaskId = ref('')
 const taskPollTimer = ref(null)
+const workMode = ref('standard')
+const batchCount = ref(3)
 
 const form = reactive({
   model_family: 'LuxVid_video',
@@ -28,6 +30,16 @@ const allowedResolutions = computed(() => selectedModel.value?.resolutions || ['
 const maxImages = computed(() => selectedModel.value?.max_images || 1)
 const secondsOptions = computed(() => selectedModel.value?.seconds_options || ['5', '10', '15'])
 const aspectRatios = computed(() => selectedModel.value?.aspect_ratios || ['16:9', '9:16'])
+const batchPromptList = computed(() => {
+  const lines = form.prompt
+    .split('\n')
+    .map(item => item.trim())
+    .filter(Boolean)
+  if (workMode.value === 'batch' && lines.length > 1) {
+    return lines
+  }
+  return Array.from({ length: Math.max(1, Number(batchCount.value) || 1) }, () => form.prompt.trim())
+})
 
 const selectedTask = computed(() => {
   return tasks.value.find(item => item.id === selectedTaskId.value) || null
@@ -70,6 +82,11 @@ function taskStatusClass(status) {
   return status || 'queued'
 }
 
+function setWorkMode(mode) {
+  workMode.value = mode
+  errorText.value = ''
+}
+
 function onFilesChange(event) {
   const list = Array.from(event.target.files || [])
   form.images = list.slice(0, maxImages.value)
@@ -106,6 +123,28 @@ async function loadTasks() {
   tasks.value = data.tasks || []
 }
 
+async function createRemoteTask(promptText) {
+  const payload = new FormData()
+  payload.append('model_family', form.model_family)
+  payload.append('aspect_ratio', form.aspect_ratio)
+  payload.append('resolution', form.resolution)
+  payload.append('seconds', form.seconds)
+  payload.append('prompt', promptText)
+  if (form.api_key.trim()) {
+    payload.append('api_key', form.api_key.trim())
+  }
+  form.images.forEach(file => payload.append('images', file, file.name))
+  const res = await fetch(`${backendBase}/api/tasks`, {
+    method: 'POST',
+    body: payload,
+  })
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data.error || '提交失败')
+  }
+  return data
+}
+
 async function submitTask() {
   errorText.value = ''
   if (!form.prompt.trim()) {
@@ -120,29 +159,30 @@ async function submitTask() {
     errorText.value = '当前模型需要填写 API Key'
     return
   }
+
+  const prompts = workMode.value === 'batch' ? batchPromptList.value : [form.prompt.trim()]
+  if (workMode.value === 'batch' && prompts.length < 2) {
+    errorText.value = '批量生成至少需要 2 个任务；可设置批量数量，或在提示词框按行输入多个提示词'
+    return
+  }
+
   submitting.value = true
   try {
-    const payload = new FormData()
-    payload.append('model_family', form.model_family)
-    payload.append('aspect_ratio', form.aspect_ratio)
-    payload.append('resolution', form.resolution)
-    payload.append('seconds', form.seconds)
-    payload.append('prompt', form.prompt)
-    if (form.api_key.trim()) {
-      payload.append('api_key', form.api_key.trim())
-    }
-    form.images.forEach(file => payload.append('images', file))
-    const res = await fetch(`${backendBase}/api/tasks`, {
-      method: 'POST',
-      body: payload,
-    })
-    const data = await res.json()
-    if (!res.ok) {
-      throw new Error(data.error || '提交失败')
+    let lastTask = null
+    for (let index = 0; index < prompts.length; index += 1) {
+      const promptText = prompts[index]
+      if (!promptText) continue
+      errorText.value = workMode.value === 'batch'
+        ? `正在提交批量任务 ${index + 1}/${prompts.length}...`
+        : ''
+      lastTask = await createRemoteTask(promptText)
     }
     clearForm()
     await loadTasks()
-    selectedTaskId.value = data.id
+    if (lastTask?.id) {
+      selectedTaskId.value = lastTask.id
+    }
+    errorText.value = ''
   } catch (error) {
     errorText.value = error.message || '提交失败'
   } finally {
@@ -218,15 +258,31 @@ onUnmounted(() => {
         </div>
 
         <div class="mode-row">
-          <button class="mode-btn active">标准模式</button>
-          <button class="mode-btn">批量生成</button>
+          <button
+            class="mode-btn"
+            :class="{ active: workMode === 'standard' }"
+            @click="setWorkMode('standard')"
+          >标准模式</button>
+          <button
+            class="mode-btn"
+            :class="{ active: workMode === 'batch' }"
+            @click="setWorkMode('batch')"
+          >批量生成</button>
         </div>
 
-        <p class="hint">左侧任务卡支持滚动查看，提示词较长时可直接在卡片内滚动编辑。</p>
+        <div v-if="workMode === 'batch'" class="batch-row">
+          <span>批量数量</span>
+          <select v-model="batchCount" class="mini-select">
+            <option v-for="num in [2,3,4,5,6,8,10]" :key="num" :value="num">{{ num }} 个</option>
+          </select>
+          <span class="batch-note">提示词多行时按行生成</span>
+        </div>
+
+        <p class="hint">左侧任务卡支持滚动查看；批量模式会把当前参考图按多个单任务提交。</p>
 
         <div class="editor-card">
           <div class="task-head-row">
-            <div class="task-chip">标准任务</div>
+            <div class="task-chip">{{ workMode === 'batch' ? `批量任务 × ${batchPromptList.length}` : '标准任务' }}</div>
             <select v-model="form.aspect_ratio" class="mini-select">
               <option v-for="ratio in aspectRatios" :key="ratio" :value="ratio">{{ ratio }}</option>
             </select>
@@ -271,7 +327,7 @@ onUnmounted(() => {
             v-model="form.prompt"
             class="prompt-box"
             rows="10"
-            placeholder="输入标准模式下的提示词..."
+            :placeholder="workMode === 'batch' ? '输入批量提示词：单行会按批量数量重复提交；多行则每行生成一个任务...' : '输入标准模式下的提示词...'"
           ></textarea>
         </div>
 
@@ -280,7 +336,7 @@ onUnmounted(() => {
         <div class="footer-actions">
           <button class="ghost" @click="clearForm">重置</button>
           <button class="primary" :disabled="submitting" @click="submitTask">
-            {{ submitting ? '提交中...' : '生成视频' }}
+            {{ submitting ? '提交中...' : (workMode === 'batch' ? `批量生成 ${batchPromptList.length} 个` : '生成视频') }}
           </button>
         </div>
       </aside>
