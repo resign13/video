@@ -15,9 +15,18 @@ if ! command -v nginx >/dev/null 2>&1; then
   apt-get update
   apt-get install -y nginx
 fi
-if ! command -v npm >/dev/null 2>&1; then
+NODE_MAJOR="0"
+if command -v node >/dev/null 2>&1; then
+  NODE_MAJOR="$(node -v | sed -E 's/^v([0-9]+).*/\1/')"
+fi
+if ! command -v npm >/dev/null 2>&1 || [ "${NODE_MAJOR:-0}" -lt 20 ]; then
   apt-get update
-  apt-get install -y nodejs npm
+  apt-get install -y ca-certificates curl gnupg
+  mkdir -p /etc/apt/keyrings
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
+  apt-get update
+  apt-get install -y nodejs
 fi
 
 python3 -m venv "$BACKEND_DIR/.venv"
