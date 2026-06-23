@@ -1,6 +1,6 @@
 param(
   [string]$RepoUrl = "https://github.com/resign13/video.git",
-  [string]$Server = "47.82.169.227",
+  [string]$Server = "47.82.216.111",
   [string]$User = "root",
   [string]$AppDir = "/opt/video"
 )

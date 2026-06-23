@@ -3,7 +3,7 @@
 
 Usage:
   python scripts/deploy_and_push.py
-  python scripts/deploy_and_push.py --message "update web" --server 47.82.169.227
+  python scripts/deploy_and_push.py --message "update web" --server 47.82.216.111
 """
 import argparse
 import subprocess
@@ -51,7 +51,7 @@ def main():
     parser.add_argument("--repo", default="https://github.com/resign13/video.git")
     parser.add_argument("--branch", default="main")
     parser.add_argument("--message", default="update web app")
-    parser.add_argument("--server", default="47.82.169.227")
+    parser.add_argument("--server", default="47.82.216.111")
     parser.add_argument("--user", default="root")
     parser.add_argument("--password", default="Caihanlin1")
     parser.add_argument("--app-dir", default="/opt/video")
