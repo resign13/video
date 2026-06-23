@@ -1,4 +1,4 @@
-﻿param(
+param(
   [string]$RepoUrl = "https://github.com/resign13/video.git",
   [string]$Server = "47.82.169.227",
   [string]$User = "root",

@@ -1,4 +1,4 @@
-﻿[Unit]
+[Unit]
 Description=AI Video Studio Web Backend
 After=network-online.target
 Wants=network-online.target

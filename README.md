@@ -1,4 +1,4 @@
-﻿# AI Video Studio Web
+# AI Video Studio Web
 
 Vue3 + Flask 视频生成网页端。
 
