@@ -445,6 +445,8 @@ input[type="file"] {
   overflow-y: auto;
   overflow-x: hidden;
   display: grid;
+  grid-auto-rows: 88px;
+  align-content: start;
   gap: 7px;
 }
 
@@ -452,8 +454,11 @@ input[type="file"] {
   border: 1px solid #2d2f38;
   border-radius: 16px;
   background: #202129;
+  height: 88px;
+  min-height: 88px;
   padding: 8px;
   cursor: pointer;
+  overflow: hidden;
 }
 
 .history-item.selected {
@@ -705,5 +710,45 @@ input[type="file"] {
 }
 
 .history-item {
-  min-height: 118px;
+  height: 88px;
+  min-height: 88px;
+}
+
+
+.history-list {
+  grid-auto-rows: 88px;
+  align-content: start;
+}
+
+.history-item {
+  height: 88px;
+  min-height: 88px;
+  overflow: hidden;
+}
+
+.history-item-title {
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-item-meta {
+  margin-top: 2px;
+  line-height: 1.15;
+}
+
+.history-images {
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.history-images img {
+  width: 28px;
+  height: 28px;
+}
+
+.history-bottom {
+  gap: 8px;
+  margin-top: 6px;
 }
