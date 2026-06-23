@@ -1,0 +1,17 @@
+﻿[Unit]
+Description=AI Video Studio Web Backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/video/backend
+EnvironmentFile=/opt/video/backend/.env
+ExecStart=/opt/video/backend/.venv/bin/gunicorn -w 2 -b 127.0.0.1:5000 --timeout 180 app:app
+Restart=always
+RestartSec=3
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

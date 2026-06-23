@@ -1,0 +1,951 @@
+import base64
+import os
+import threading
+import time
+import uuid
+from dataclasses import dataclass
+from datetime import datetime
+from io import BytesIO
+from pathlib import Path
+from typing import Dict, List, Optional
+from urllib.parse import urlparse
+
+import requests
+from flask import Flask, jsonify, request, send_file
+from flask_cors import CORS
+from PIL import Image
+from requests import exceptions as requests_exceptions
+from werkzeug.utils import secure_filename
+
+
+APP_NAME = "AI Video Studio Web"
+ROOT_DIR = Path(__file__).resolve().parent
+DATA_DIR = ROOT_DIR / "data"
+UPLOAD_DIR = DATA_DIR / "uploads"
+OUTPUT_DIR = DATA_DIR / "outputs"
+
+
+def load_dotenv_if_present():
+    env_path = ROOT_DIR / ".env"
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def env_value(name: str, default: str = ""):
+    return os.environ.get(name, default)
+
+
+load_dotenv_if_present()
+
+BASE_URL = env_value("BASE_URL", "https://api.dealonhorizon.us")
+SEEDANCE2_BASE_URL = env_value("SEEDANCE2_BASE_URL", "https://api.xbyjs.top")
+SEEDANCE2_CHANNEL2_BASE_URL = env_value("SEEDANCE2_CHANNEL2_BASE_URL", "https://api.dopio.cyou")
+HANCAT_BASE_URL = env_value("HANCAT_BASE_URL", "https://img-api.xn--1ys141f4ks.com")
+GROK_IMAGINE_BASE_URL = env_value("GROK_IMAGINE_BASE_URL", "https://zexitongxue.com")
+LUXVID_BASE_URL = env_value("LUXVID_BASE_URL", "https://zcbservice.aizfw.cn/kyyReactApiServer")
+IMGBB_UPLOAD_URL = env_value("IMGBB_UPLOAD_URL", "https://api.imgbb.com/1/upload")
+SORA_VIP3_BASE_URL = env_value("SORA_VIP3_BASE_URL", "https://socdabat.it.com")
+SORA_VIP3_1080_BASE_URL = env_value("SORA_VIP3_1080_BASE_URL", "https://zexitongxue.com")
+LONGXIA_BASE_URL = env_value("LONGXIA_BASE_URL", "https://api.longxiaai.store")
+
+DEFAULT_API_KEY = env_value("DEFAULT_API_KEY")
+SEEDANCE2_API_KEY = env_value("SEEDANCE2_API_KEY")
+SEEDANCE2_CHANNEL2_API_KEY = env_value("SEEDANCE2_CHANNEL2_API_KEY")
+HANCAT_API_KEY = env_value("HANCAT_API_KEY")
+GROK_IMAGINE_API_KEY = env_value("GROK_IMAGINE_API_KEY")
+LUXVID_API_KEY = env_value("LUXVID_API_KEY")
+IMGBB_API_KEY = env_value("IMGBB_API_KEY")
+SORA_VIP3_API_KEY = env_value("SORA_VIP3_API_KEY")
+SORA_VIP3_1080_API_KEY = env_value("SORA_VIP3_1080_API_KEY")
+LONGXIA_API_KEY = env_value("LONGXIA_API_KEY")
+
+POLL_INTERVAL_SECONDS = 5
+LONGXIA_POLL_INTERVAL_SECONDS = 120
+TRANSIENT_REQUEST_RETRIES = 4
+DOWNLOAD_RETRIES = 3
+RETRY_SLEEP_SECONDS = 2
+MAX_REFERENCES = 9
+SECONDS_OPTIONS = ["5", "10", "15"]
+
+PROMPT_RATIO_MODELS = {"seedance2", "jimeng-video-3.5-pro-12s", "sora-2-12s"}
+LOW_RES_ONLY_MODELS = {"LuxVid_video", "seedance2渠道2", "grok-imagine-video-1.5-preview"}
+
+MODEL_MATRIX = {
+    "veo3 fast": {
+        "16:9": {
+            "720p": "veo_3_1_r2v_fast_landscape",
+            "1080p": "veo_3_1_r2v_fast_landscape_1080p",
+            "4K": "veo_3_1_r2v_fast_landscape_4k",
+        },
+        "9:16": {
+            "720p": "veo_3_1_r2v_fast_portrait",
+            "1080p": "veo_3_1_r2v_fast_portrait_1080p",
+            "4K": "veo_3_1_r2v_fast_portrait_4k",
+        },
+    },
+    "veo3": {
+        "16:9": {
+            "720p": "veo_3_1_i2v_s_landscape",
+            "1080p": "veo_3_1_i2v_s_landscape_1080p",
+            "4K": "veo_3_1_i2v_s_landscape_4k",
+        },
+        "9:16": {
+            "720p": "veo_3_1_i2v_s_portrait",
+            "1080p": "veo_3_1_i2v_s_portrait_1080p",
+            "4K": "veo_3_1_i2v_s_portrait_4k",
+        },
+    },
+    "seedance2": {
+        "16:9": {"720p": "dance2-fast-15s", "1080p": "dance2-fast-15s", "4K": "dance2-fast-15s"},
+        "9:16": {"720p": "dance2-fast-15s", "1080p": "dance2-fast-15s", "4K": "dance2-fast-15s"},
+    },
+    "jimeng-video-3.5-pro-12s": {
+        "16:9": {
+            "720p": "jimeng-video-3.5-pro-12s",
+            "1080p": "jimeng-video-3.5-pro-12s",
+            "4K": "jimeng-video-3.5-pro-12s",
+        },
+        "9:16": {
+            "720p": "jimeng-video-3.5-pro-12s",
+            "1080p": "jimeng-video-3.5-pro-12s",
+            "4K": "jimeng-video-3.5-pro-12s",
+        },
+    },
+    "sora-2-12s": {
+        "16:9": {"720p": "sora-2-12s", "1080p": "sora-2-12s", "4K": "sora-2-12s"},
+        "9:16": {"720p": "sora-2-12s", "1080p": "sora-2-12s", "4K": "sora-2-12s"},
+    },
+}
+
+MODEL_OPTIONS = [
+    {"label": "LuxVid_video", "value": "LuxVid_video"},
+    {"label": "seedance2渠道2", "value": "seedance2渠道2", "needs_api_key": True},
+    {"label": "grok-imagine-video-1.5-preview", "value": "grok-imagine-video-1.5-preview"},
+    {"label": "veo3.1-components", "value": "veo3.1-components"},
+    {"label": "veo3.1-fast-components", "value": "veo3.1-fast-components"},
+]
+
+def ensure_dir(path: Path):
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def now_text():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def short_now():
+    return datetime.now().strftime("%H:%M:%S")
+
+
+def resample_filter():
+    if hasattr(Image, "Resampling"):
+        return Image.Resampling.LANCZOS
+    return Image.LANCZOS
+
+
+def process_image_to_data_url(file_path: Path):
+    image = Image.open(file_path)
+    max_size = 720
+    if max(image.size) > max_size:
+        image.thumbnail((max_size, max_size), resample_filter())
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    quality = 72
+    while True:
+        buffer = BytesIO()
+        image.save(buffer, format="JPEG", quality=quality, optimize=True)
+        content = buffer.getvalue()
+        if len(content) > 500 * 1024 and quality > 35:
+            quality -= 8
+            continue
+        encoded = base64.b64encode(content).decode("utf-8")
+        return f"data:image/jpeg;base64,{encoded}"
+
+
+def load_file_base64(file_path: Path):
+    return base64.b64encode(file_path.read_bytes()).decode("utf-8")
+
+
+def upload_image_to_imgbb(file_path: Path, api_key=IMGBB_API_KEY, timeout=120):
+    response = requests.post(
+        IMGBB_UPLOAD_URL,
+        data={"key": api_key, "image": load_file_base64(file_path), "name": file_path.stem},
+        timeout=timeout,
+    )
+    if response.status_code not in (200, 201):
+        raise RuntimeError(f"ImgBB 上传失败 {response.status_code}: {response.text}")
+    payload = response.json()
+    data = payload.get("data") or {}
+    url = data.get("url") or data.get("display_url")
+    if not payload.get("success", False) or not url:
+        raise RuntimeError(f"ImgBB 上传失败: {payload}")
+    return url
+
+
+def extract_video_url_recursive(payload):
+    if isinstance(payload, str):
+        return payload if payload.startswith(("http://", "https://", "/")) else ""
+    if isinstance(payload, list):
+        for item in payload:
+            url = extract_video_url_recursive(item)
+            if url:
+                return url
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("output_url", "video_url", "url", "download_url", "result_url", "file_url", "videoUrl", "downloadUrl", "resultUrl", "fileUrl"):
+        url = extract_video_url_recursive(payload.get(key))
+        if url:
+            return url
+    for value in payload.values():
+        url = extract_video_url_recursive(value)
+        if url:
+            return url
+    return ""
+
+
+def normalize_video_url(url: str, api_base: str):
+    if not url:
+        return ""
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    if url.startswith("/"):
+        return f"{api_base}{url}"
+    return f"{api_base}/{url}"
+
+
+def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
+    if model_family == "LuxVid_video":
+        return "videos_stable"
+    if model_family == "seedance2渠道2":
+        return "seedance2"
+    if model_family in ("veo3.1-components", "veo3.1-fast-components"):
+        return "gemini-veo-3.1-generate-preview-ref-8s"
+    if model_family == "grok-imagine-video-1.5-preview":
+        return model_family
+    if model_family == "longxia-seedance-2.0":
+        return "LongXia-G-Seedance-2.0"
+    if model_family == "sora-vip3-pro-1080p":
+        return "sora-vip3-pro-1080p"
+    if model_family == "sora-vip3-pro":
+        return "sora-vip3-pro-1080p" if resolution == "1080p" else "sora-vip3-pro-720p"
+    return MODEL_MATRIX[model_family][aspect_ratio][resolution]
+
+
+def build_size_value(aspect_ratio: str, resolution: str):
+    size_map = {
+        ("16:9", "480p"): "854x480",
+        ("16:9", "720p"): "1280*720",
+        ("16:9", "1080p"): "1920*1080",
+        ("16:9", "4K"): "3840*2160",
+        ("9:16", "480p"): "480x854",
+        ("9:16", "720p"): "720*1280",
+        ("9:16", "1080p"): "1080*1920",
+        ("9:16", "4K"): "2160*3840",
+        ("4:3", "480p"): "640x480",
+        ("4:3", "720p"): "960*720",
+        ("3:4", "480p"): "480x640",
+        ("3:4", "720p"): "720*960",
+        ("1:1", "480p"): "480x480",
+        ("1:1", "720p"): "720*720",
+        ("21:9", "480p"): "1120x480",
+        ("21:9", "720p"): "1680*720",
+    }
+    return size_map[(aspect_ratio, resolution)]
+
+
+def get_backend_config(model_family: str):
+    if model_family == "LuxVid_video":
+        return {
+            "api_base": LUXVID_BASE_URL,
+            "api_key": LUXVID_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "luxvid_videos_async",
+        }
+    if model_family == "seedance2渠道2":
+        return {
+            "api_base": SEEDANCE2_CHANNEL2_BASE_URL,
+            "api_key": SEEDANCE2_CHANNEL2_API_KEY,
+            "auth_mode": "x-api-key",
+            "request_mode": "go2api_channel2_async",
+        }
+    if model_family == "grok-imagine-video-1.5-preview":
+        return {
+            "api_base": GROK_IMAGINE_BASE_URL,
+            "api_key": GROK_IMAGINE_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "grok_imagine_videos_async",
+        }
+    if model_family in ("veo3.1-components", "veo3.1-fast-components"):
+        return {
+            "api_base": HANCAT_BASE_URL,
+            "api_key": HANCAT_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "hancat_videos_async",
+        }
+    if model_family == "sora-vip3-pro-1080p":
+        return {
+            "api_base": SORA_VIP3_1080_BASE_URL,
+            "api_key": SORA_VIP3_1080_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "sora_vip3_multi_image",
+        }
+    if model_family == "longxia-seedance-2.0":
+        return {
+            "api_base": LONGXIA_BASE_URL,
+            "api_key": LONGXIA_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "longxia_videos_async",
+        }
+    if model_family == "sora-vip3-pro":
+        return {
+            "api_base": SORA_VIP3_BASE_URL,
+            "api_key": SORA_VIP3_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "sora_vip3_multi_image",
+        }
+    if model_family in ("seedance2", "jimeng-video-3.5-pro-12s", "sora-2-12s"):
+        return {
+            "api_base": SEEDANCE2_BASE_URL,
+            "api_key": SEEDANCE2_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "videos_async",
+        }
+    return {
+        "api_base": BASE_URL,
+        "api_key": DEFAULT_API_KEY,
+        "auth_mode": "x-api-key",
+        "request_mode": "generate_async",
+    }
+
+
+def build_request_prompt(model_family: str, prompt: str, aspect_ratio: str):
+    prompt = prompt.strip()
+    if model_family not in PROMPT_RATIO_MODELS:
+        return prompt
+    if aspect_ratio in prompt:
+        return prompt
+    return f"{prompt}\n{aspect_ratio}"
+
+
+def get_max_images_for_model(model_family: str):
+    if model_family == "grok-imagine-video-1.5-preview":
+        return 7
+    if model_family in ("veo3.1-components", "veo3.1-fast-components"):
+        return 3
+    return 9
+
+
+def get_allowed_resolutions(model_family: str):
+    if model_family in ("veo3.1-components", "veo3.1-fast-components"):
+        return ["1080p"]
+    return ["720p"]
+
+
+def get_allowed_seconds(model_family: str):
+    if model_family == "LuxVid_video":
+        return ["15"]
+    if model_family == "seedance2渠道2":
+        return ["5", "8", "10"]
+    if model_family == "grok-imagine-video-1.5-preview":
+        return ["6", "10"]
+    if model_family in ("veo3.1-components", "veo3.1-fast-components"):
+        return ["8"]
+    return SECONDS_OPTIONS
+
+
+def build_grok_imagine_size_value(aspect_ratio: str):
+    return {
+        "1:1": "1024x1024",
+        "16:9": "1280x720",
+        "21:9": "1792x1024",
+        "9:16": "720x1280",
+        "3:4": "720x1280",
+        "4:3": "1280x720",
+    }.get(aspect_ratio, "1280x720")
+
+
+def serialize_task(task: dict):
+    data = dict(task)
+    data.pop("thread", None)
+    data["download_url"] = f"/api/tasks/{task['id']}/download" if task.get("local_path") else None
+    data["image_preview_urls"] = [
+        f"/api/tasks/{task['id']}/images/{index}"
+        for index, _ in enumerate(task.get("image_paths", []))
+    ]
+    return data
+
+
+@dataclass
+class WebTaskRunner:
+    task_store: Dict[str, dict]
+    lock: threading.Lock
+
+    def log(self, task_id: str, message: str):
+        with self.lock:
+            task = self.task_store.get(task_id)
+            if not task:
+                return
+            task["logs"].append(f"[{short_now()}] {message}")
+            task["logs"] = task["logs"][-100:]
+
+    def update(self, task_id: str, **kwargs):
+        with self.lock:
+            task = self.task_store.get(task_id)
+            if not task:
+                return
+            task.update(kwargs)
+
+    def build_headers(self, auth_mode: str, api_key: str):
+        if auth_mode == "bearer":
+            return {"Authorization": f"Bearer {api_key}"}
+        return {"X-API-Key": api_key}
+
+    def is_transient_request_error(self, error):
+        if isinstance(error, (requests_exceptions.ConnectionError, requests_exceptions.Timeout)):
+            return True
+        text = str(error or "").lower()
+        return any(
+            marker in text
+            for marker in [
+                "connection aborted",
+                "connection reset",
+                "remote end closed connection",
+                "read timed out",
+                "timed out",
+                "temporarily unavailable",
+                "proxyerror",
+                "bad gateway",
+                "502",
+                "503",
+                "504",
+                "10054",
+            ]
+        )
+
+    def request_with_retry(self, method, url, **kwargs):
+        last_error = None
+        for attempt in range(1, TRANSIENT_REQUEST_RETRIES + 1):
+            try:
+                return requests.request(method, url, **kwargs)
+            except requests_exceptions.RequestException as exc:
+                last_error = exc
+                if attempt >= TRANSIENT_REQUEST_RETRIES or not self.is_transient_request_error(exc):
+                    raise
+                time.sleep(RETRY_SLEEP_SECONDS)
+        if last_error:
+            raise last_error
+        raise RuntimeError("request failed")
+
+    def run_task(self, task_id: str):
+        with self.lock:
+            task = self.task_store.get(task_id)
+            if not task:
+                return
+        started_at = time.time()
+        try:
+            self.update(task_id, status="running", status_text="submitting", progress=8)
+            self.log(task_id, "submitting task")
+            remote_task_id = self.submit_task(task)
+            self.update(task_id, remote_task_id=remote_task_id, display_id=remote_task_id)
+            self.log(task_id, f"remote task id: {remote_task_id}")
+            remote_url = self.poll_task(task, remote_task_id)
+            self.update(task_id, status_text="downloading")
+            local_path = self.download_video(task, remote_url, remote_task_id)
+            duration = round(time.time() - started_at, 1)
+            self.update(
+                task_id,
+                status="completed",
+                progress=100,
+                status_text="completed",
+                remote_url=remote_url,
+                local_path=str(local_path),
+                duration_seconds=duration,
+            )
+            self.log(task_id, f"completed: {local_path.name}")
+        except Exception as exc:
+            self.update(task_id, status="failed", error=str(exc), status_text="failed")
+            self.log(task_id, f"failed: {exc}")
+
+    def submit_task(self, task: dict):
+        request_mode = task["request_mode"]
+        headers = self.build_headers(task["auth_mode"], task["api_key"])
+
+        if request_mode == "luxvid_videos_async":
+            reference_images = [upload_image_to_imgbb(Path(path)) for path in task["image_paths"][:9]]
+            payload = {
+                "model": task["model_id"],
+                "prompt": task["prompt"],
+                "duration": 15,
+                "ratio": task["aspect_ratio"],
+                "resolution": "720p",
+                "referenceImages": reference_images,
+            }
+            headers["Content-Type"] = "application/json"
+            response = self.request_with_retry(
+                "post",
+                f"{task['api_base']}/v1/videos/videos",
+                headers=headers,
+                json=payload,
+                timeout=120,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if data.get("error"):
+                raise RuntimeError(str(data.get("error")))
+            return data.get("task_id") or data.get("id") or data.get("taskId")
+
+        if request_mode == "go2api_channel2_async":
+            image_refs = [process_image_to_data_url(Path(path)) for path in task["image_paths"][:9]]
+            payload = {
+                "channel": 2,
+                "model": "seedance2",
+                "prompt": task["prompt"],
+                "duration": int(str(task["seconds"])),
+                "aspect_ratio": task["aspect_ratio"],
+                "image_refs": image_refs,
+            }
+            headers["Content-Type"] = "application/json"
+            headers["Accept"] = "application/json"
+            response = self.request_with_retry(
+                "post",
+                f"{task['api_base']}/api/v1/generate",
+                headers=headers,
+                json=payload,
+                timeout=120,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("task_id") or data.get("id") or data.get("taskId")
+
+        if request_mode == "grok_imagine_videos_async":
+            image_urls = [process_image_to_data_url(Path(path)) for path in task["image_paths"][:7]]
+            payload = {
+                "model": task["model_id"],
+                "prompt": task["prompt"],
+                "seconds": str(task["seconds"]),
+                "duration": int(str(task["seconds"])),
+                "size": build_grok_imagine_size_value(task["aspect_ratio"]),
+            }
+            if len(image_urls) == 1:
+                payload["image"] = image_urls[0]
+            else:
+                payload["images"] = image_urls
+            headers["Content-Type"] = "application/json"
+            response = self.request_with_retry(
+                "post",
+                f"{task['api_base']}/v1/videos",
+                headers=headers,
+                json=payload,
+                timeout=120,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("task_id") or data.get("id") or data.get("taskId")
+
+        if request_mode == "hancat_videos_async":
+            image_urls = [process_image_to_data_url(Path(path)) for path in task["image_paths"][:3]]
+            payload = {
+                "model": task["model_id"],
+                "prompt": task["prompt"],
+                "type": 3,
+                "aspect_ratio": task["aspect_ratio"],
+                "seconds": "8",
+                "images": image_urls,
+                "generate_audio": True,
+                "negative_prompt": "blur, distortion, low quality",
+            }
+            headers["Content-Type"] = "application/json"
+            response = self.request_with_retry(
+                "post",
+                f"{task['api_base']}/v1/videos",
+                headers=headers,
+                json=payload,
+                timeout=120,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("task_id") or data.get("id") or data.get("taskId")
+
+        if request_mode == "sora_vip3_multi_image":
+            reference_urls = [process_image_to_data_url(Path(path)) for path in task["image_paths"]]
+            payload = {
+                "model": task["model_id"],
+                "prompt": task["prompt"],
+                "aspect_ratio": task["aspect_ratio"],
+                "resolution": task["resolution"],
+                "seconds": str(task["seconds"]),
+            }
+            if len(reference_urls) == 1:
+                payload["image_url"] = reference_urls[0]
+            elif reference_urls:
+                payload["reference_image_urls"] = reference_urls
+            headers["Content-Type"] = "application/json"
+            response = self.request_with_retry(
+                "post",
+                f"{task['api_base']}/v1/videos",
+                headers=headers,
+                json=payload,
+                timeout=120,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("task_id") or data.get("id") or data.get("taskId")
+
+        if request_mode == "longxia_videos_async":
+            payload = {
+                "model": task["model_id"],
+                "prompt": task["prompt"],
+                "seconds": str(task["seconds"]),
+                "size": task["size_value"].replace("*", "x"),
+                "generate_audio": True,
+                "reference_images": [
+                    {
+                        "b64_json": load_file_base64(Path(image_path)),
+                        "filename": Path(image_path).name,
+                    }
+                    for image_path in task["image_paths"]
+                ],
+            }
+            headers["Content-Type"] = "application/json"
+            response = self.request_with_retry(
+                "post",
+                f"{task['api_base']}/v1/videos",
+                headers=headers,
+                json=payload,
+                timeout=60,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("id") or data.get("task_id") or data.get("taskId")
+
+        if request_mode == "videos_async":
+            form_data = {"model": task["model_id"], "prompt": task["prompt"]}
+            if task["size_value"]:
+                form_data["size"] = task["size_value"]
+            files = []
+            file_handles = []
+            try:
+                for image_path in task["image_paths"]:
+                    handle = open(image_path, "rb")
+                    file_handles.append(handle)
+                    files.append(("input_reference", (Path(image_path).name, handle, "application/octet-stream")))
+                response = self.request_with_retry(
+                    "post",
+                    f"{task['api_base']}/v1/videos",
+                    headers=headers,
+                    data=form_data,
+                    files=files,
+                    timeout=120,
+                )
+            finally:
+                for handle in file_handles:
+                    handle.close()
+            response.raise_for_status()
+            data = response.json()
+            return data.get("task_id") or data.get("id") or data.get("taskId")
+
+        content = []
+        for image_path in task["image_paths"]:
+            content.append({"type": "image_url", "image_url": {"url": process_image_to_data_url(Path(image_path))}})
+        content.append({"type": "text", "text": task["prompt"]})
+        payload = {"model": task["model_id"], "messages": [{"role": "user", "content": content}]}
+        response = self.request_with_retry(
+            "post",
+            f"{task['api_base']}/v1/generate",
+            headers=headers,
+            json=payload,
+            timeout=60,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data.get("task_id") or data.get("id") or data.get("taskId")
+
+    def poll_task(self, task: dict, remote_task_id: str):
+        headers = self.build_headers(task["auth_mode"], task["api_key"])
+        request_mode = task["request_mode"]
+        pulse_progress = 20
+        interval = LONGXIA_POLL_INTERVAL_SECONDS if request_mode == "longxia_videos_async" else POLL_INTERVAL_SECONDS
+
+        while True:
+            if request_mode == "luxvid_videos_async":
+                poll_url = f"{task['api_base']}/v1/result/{remote_task_id}"
+            elif request_mode == "go2api_channel2_async":
+                poll_url = f"{task['api_base']}/api/v1/tasks/{remote_task_id}"
+            elif request_mode in ("videos_async", "sora_vip3_multi_image", "longxia_videos_async", "grok_imagine_videos_async", "hancat_videos_async"):
+                poll_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
+            else:
+                poll_url = f"{task['api_base']}/v1/tasks/{remote_task_id}"
+
+            response = self.request_with_retry("get", poll_url, headers=headers, timeout=60)
+            response.raise_for_status()
+            raw_data = response.json()
+            if request_mode == "luxvid_videos_async":
+                data = raw_data
+            elif request_mode == "longxia_videos_async":
+                data = raw_data.get("data", raw_data)
+            else:
+                data = raw_data
+            status = str(data.get("status", "")).lower()
+            progress = data.get("progress")
+
+            if isinstance(progress, (int, float)):
+                self.update(task["id"], progress=max(12, min(95, int(progress))))
+            else:
+                pulse_progress = min(92, pulse_progress + 6)
+                self.update(task["id"], progress=pulse_progress)
+
+            if status in ("queued", "pending"):
+                self.update(task["id"], status_text="queued")
+            elif status in ("running", "processing", "in_progress"):
+                self.update(task["id"], status_text="processing")
+            elif status in ("completed", "success", "succeeded", "done"):
+                result = data.get("result") or {}
+                remote_url = (
+                    data.get("video_url")
+                    or data.get("url")
+                    or data.get("result_url")
+                    or result.get("file_url")
+                    or result.get("url")
+                    or raw_data.get("video_url")
+                    or raw_data.get("url")
+                )
+                remote_url = normalize_video_url(remote_url, task["api_base"])
+                if not remote_url:
+                    remote_url = normalize_video_url(extract_video_url_recursive(raw_data), task["api_base"])
+                if not remote_url:
+                    if request_mode == "sora_vip3_multi_image":
+                        remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}/content"
+                    elif request_mode == "videos_async":
+                        remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}/file"
+                    elif request_mode in ("grok_imagine_videos_async", "hancat_videos_async"):
+                        remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
+                if not remote_url:
+                    raise RuntimeError(f"missing video url: {raw_data}")
+                return remote_url
+            elif status in ("failed", "failure", "error"):
+                error_text = data.get("error")
+                if isinstance(error_text, dict):
+                    error_text = error_text.get("message") or str(error_text)
+                raise RuntimeError(error_text or str(raw_data))
+
+            time.sleep(interval)
+
+    def download_video(self, task: dict, remote_url: str, remote_task_id: str):
+        date_folder = datetime.now().strftime("%Y-%m-%d")
+        save_dir = OUTPUT_DIR / date_folder
+        ensure_dir(save_dir)
+        file_name = f"video_{datetime.now().strftime('%H%M%S')}_{remote_task_id[:8]}.mp4"
+        local_path = save_dir / file_name
+
+        headers = {"User-Agent": "Mozilla/5.0"}
+        if urlparse(remote_url).netloc == urlparse(task["api_base"]).netloc:
+            headers.update(self.build_headers(task["auth_mode"], task["api_key"]))
+
+        last_error = None
+        for attempt in range(1, DOWNLOAD_RETRIES + 1):
+            try:
+                response = self.request_with_retry("get", remote_url, headers=headers, stream=True, timeout=120)
+                with response:
+                    response.raise_for_status()
+                    with open(local_path, "wb") as handle:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                handle.write(chunk)
+                return local_path
+            except (requests_exceptions.RequestException, OSError) as exc:
+                last_error = exc
+                if attempt >= DOWNLOAD_RETRIES or not self.is_transient_request_error(exc):
+                    raise
+                time.sleep(RETRY_SLEEP_SECONDS)
+        raise last_error
+
+
+ensure_dir(UPLOAD_DIR)
+ensure_dir(OUTPUT_DIR)
+
+app = Flask(__name__)
+CORS(app)
+TASKS: Dict[str, dict] = {}
+TASK_LOCK = threading.Lock()
+RUNNER = WebTaskRunner(TASKS, TASK_LOCK)
+
+
+@app.get("/api/health")
+def health():
+    return jsonify({"ok": True, "name": APP_NAME, "time": now_text()})
+
+
+@app.get("/api/models")
+def models():
+    model_data = []
+    for item in MODEL_OPTIONS:
+        model_family = item["value"]
+        model_data.append(
+            {
+                "label": item["label"],
+                "value": model_family,
+                "max_images": get_max_images_for_model(model_family),
+                "resolutions": get_allowed_resolutions(model_family),
+                "seconds_options": get_allowed_seconds(model_family),
+                "aspect_ratios": ["16:9", "9:16", "4:3", "3:4", "1:1", "21:9"],
+                "needs_api_key": item.get("needs_api_key", False),
+            }
+        )
+    return jsonify({"models": model_data})
+
+
+@app.get("/api/tasks")
+def list_tasks():
+    with TASK_LOCK:
+        tasks = [serialize_task(task) for task in sorted(TASKS.values(), key=lambda x: x["created_ts"], reverse=True)]
+    return jsonify({"tasks": tasks})
+
+
+@app.get("/api/tasks/<task_id>")
+def get_task(task_id: str):
+    with TASK_LOCK:
+        task = TASKS.get(task_id)
+        if not task:
+            return jsonify({"error": "task not found"}), 404
+        return jsonify(serialize_task(task))
+
+
+@app.get("/api/tasks/<task_id>/download")
+def download_task(task_id: str):
+    with TASK_LOCK:
+        task = TASKS.get(task_id)
+        if not task:
+            return jsonify({"error": "task not found"}), 404
+        local_path = task.get("local_path")
+    if not local_path or not os.path.exists(local_path):
+        return jsonify({"error": "video not ready"}), 404
+    return send_file(local_path, as_attachment=True, download_name=Path(local_path).name)
+
+
+@app.get("/api/tasks/<task_id>/images/<int:image_index>")
+def get_task_image(task_id: str, image_index: int):
+    with TASK_LOCK:
+        task = TASKS.get(task_id)
+        if not task:
+            return jsonify({"error": "task not found"}), 404
+        image_paths = task.get("image_paths") or []
+    if image_index < 0 or image_index >= len(image_paths):
+        return jsonify({"error": "image not found"}), 404
+    image_path = image_paths[image_index]
+    if not os.path.exists(image_path):
+        return jsonify({"error": "image file missing"}), 404
+    return send_file(image_path)
+
+
+@app.post("/api/tasks")
+def create_task():
+    model_family = (request.form.get("model_family") or "").strip()
+    prompt = (request.form.get("prompt") or "").strip()
+    aspect_ratio = (request.form.get("aspect_ratio") or "16:9").strip()
+    resolution = (request.form.get("resolution") or "720p").strip()
+    seconds = str(request.form.get("seconds") or "5").strip()
+    files = request.files.getlist("images")
+    manual_api_key = (request.form.get("api_key") or "").strip()
+
+    if not model_family:
+        return jsonify({"error": "missing model_family"}), 400
+    if model_family not in {item["value"] for item in MODEL_OPTIONS}:
+        return jsonify({"error": "unsupported model_family"}), 400
+    if not prompt:
+        return jsonify({"error": "missing prompt"}), 400
+
+    max_images = get_max_images_for_model(model_family)
+    if not files:
+        return jsonify({"error": "at least one reference image is required"}), 400
+    if len(files) > max_images:
+        return jsonify({"error": f"model allows at most {max_images} images"}), 400
+
+    allowed_resolutions = get_allowed_resolutions(model_family)
+    if resolution not in allowed_resolutions:
+        return jsonify({"error": f"resolution must be one of {allowed_resolutions}"}), 400
+
+    request_id = uuid.uuid4().hex[:10]
+    task_upload_dir = UPLOAD_DIR / request_id
+    ensure_dir(task_upload_dir)
+    image_paths: List[str] = []
+    for index, file_storage in enumerate(files, start=1):
+        filename = secure_filename(file_storage.filename or f"image_{index}.jpg")
+        if not filename:
+            filename = f"image_{index}.jpg"
+        save_path = task_upload_dir / filename
+        file_storage.save(save_path)
+        image_paths.append(str(save_path))
+
+    model_id = build_model_id(model_family, aspect_ratio, resolution)
+    backend = get_backend_config(model_family)
+    if model_family == "seedance2渠道2":
+        if not manual_api_key:
+            return jsonify({"error": "seedance2渠道2 需要填写 API Key"}), 400
+        backend = dict(backend)
+        backend["api_key"] = manual_api_key
+    size_value = (
+        ""
+        if model_family in PROMPT_RATIO_MODELS
+        or model_family in (
+            "LuxVid_video",
+            "seedance2渠道2",
+            "grok-imagine-video-1.5-preview",
+            "veo3.1-components",
+            "veo3.1-fast-components",
+        )
+        else build_size_value(aspect_ratio, resolution)
+    )
+    prompt = build_request_prompt(model_family, prompt, aspect_ratio)
+
+    task = {
+        "id": request_id,
+        "display_id": f"task_{request_id}",
+        "remote_task_id": "",
+        "created_at": now_text(),
+        "created_ts": time.time(),
+        "status": "queued",
+        "status_text": "queued",
+        "progress": 0,
+        "error": "",
+        "model_family": model_family,
+        "model_id": model_id,
+        "aspect_ratio": aspect_ratio,
+        "resolution": resolution,
+        "seconds": seconds,
+        "prompt": prompt,
+        "image_paths": image_paths,
+        "size_value": size_value,
+        "api_base": backend["api_base"],
+        "api_key": backend["api_key"],
+        "auth_mode": backend["auth_mode"],
+        "request_mode": backend["request_mode"],
+        "remote_url": "",
+        "local_path": "",
+        "duration_seconds": None,
+        "logs": [f"[{short_now()}] task created"],
+    }
+
+    thread = threading.Thread(target=RUNNER.run_task, args=(request_id,), daemon=True)
+    task["thread"] = thread
+    with TASK_LOCK:
+        TASKS[request_id] = task
+    thread.start()
+    return jsonify(serialize_task(task)), 202
+
+
+if __name__ == "__main__":
+    app.run(
+        host=env_value("FLASK_HOST", "0.0.0.0"),
+        port=int(env_value("FLASK_PORT", "5000")),
+        debug=env_value("FLASK_DEBUG", "0") == "1",
+    )
