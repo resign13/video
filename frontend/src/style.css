@@ -752,3 +752,8 @@ input[type="file"] {
   gap: 8px;
   margin-top: 6px;
 }
+
+
+.preview-actions.single-action {
+  grid-template-columns: 1fr;
+}

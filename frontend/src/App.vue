@@ -408,8 +408,7 @@ onUnmounted(() => {
             <div class="detail-label">日志</div>
             <div class="detail-box log-box">{{ (selectedTask?.logs || []).join('\n') }}</div>
 
-            <div class="preview-actions">
-              <button class="ghost small" :disabled="!selectedTask?.download_url" @click="openPreview(selectedTask)">播放</button>
+            <div class="preview-actions single-action">
               <button class="ghost small" :disabled="!selectedTask?.download_url" @click="openDownload(selectedTask)">下载</button>
             </div>
           </div>
