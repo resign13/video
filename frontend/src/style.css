@@ -287,7 +287,7 @@ input[type="file"] {
 
 .right-panel {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) 230px;
+  grid-template-rows: minmax(280px, 0.66fr) minmax(260px, 0.34fr);
   gap: 7px;
   min-height: 0;
   overflow: hidden;
@@ -440,8 +440,10 @@ input[type="file"] {
 
 .history-list {
   margin-top: 8px;
-  height: 174px;
-  overflow: auto;
+  height: calc(100% - 34px);
+  min-height: 220px;
+  overflow-y: auto;
+  overflow-x: hidden;
   display: grid;
   gap: 7px;
 }
@@ -604,10 +606,11 @@ input[type="file"] {
     min-height: 110px;
   }
   .right-panel {
-    grid-template-rows: minmax(0, 1fr) 190px;
+    grid-template-rows: minmax(260px, 0.62fr) minmax(250px, 0.38fr);
   }
   .history-list {
-    height: 138px;
+    height: calc(100% - 32px);
+    min-height: 210px;
   }
 }
 
@@ -672,4 +675,35 @@ input[type="file"] {
 .remove-image:hover {
   background: #ff4d6d;
   border-color: #ff8ca0;
+}
+
+
+.history-card {
+  min-height: 260px;
+  overflow: hidden;
+}
+
+.history-list::-webkit-scrollbar,
+.log-box::-webkit-scrollbar,
+.prompt-view::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.history-list::-webkit-scrollbar-thumb,
+.log-box::-webkit-scrollbar-thumb,
+.prompt-view::-webkit-scrollbar-thumb {
+  background: #4b4d5e;
+  border-radius: 999px;
+}
+
+.history-list::-webkit-scrollbar-track,
+.log-box::-webkit-scrollbar-track,
+.prompt-view::-webkit-scrollbar-track {
+  background: #181920;
+  border-radius: 999px;
+}
+
+.history-item {
+  min-height: 118px;
 }
