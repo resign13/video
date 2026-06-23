@@ -80,7 +80,7 @@ CLEANUP_INTERVAL_SECONDS = 10 * 60
 SECONDS_OPTIONS = ["5", "10", "15"]
 
 PROMPT_RATIO_MODELS = {"seedance2", "jimeng-video-3.5-pro-12s", "sora-2-12s"}
-LOW_RES_ONLY_MODELS = {"LuxVid_video", "seedance2渠道2", "grok-imagine-video-1.5-preview"}
+LOW_RES_ONLY_MODELS = {"LuxVid_video", "videos_stable_fast", "seedance2渠道2", "grok-imagine-video-1.5-preview"}
 
 MODEL_MATRIX = {
     "veo3 fast": {
@@ -131,6 +131,7 @@ MODEL_MATRIX = {
 
 MODEL_OPTIONS = [
     {"label": "LuxVid_video", "value": "LuxVid_video"},
+    {"label": "videos_stable_fast", "value": "videos_stable_fast"},
     {"label": "seedance2渠道2", "value": "seedance2渠道2", "needs_api_key": True},
     {"label": "grok-imagine-video-1.5-preview", "value": "grok-imagine-video-1.5-preview"},
     {"label": "veo3.1-components", "value": "veo3.1-components"},
@@ -233,6 +234,8 @@ def normalize_video_url(url: str, api_base: str):
 def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
     if model_family == "LuxVid_video":
         return "videos_stable"
+    if model_family == "videos_stable_fast":
+        return "videos_stable_fast"
     if model_family == "seedance2渠道2":
         return "seedance2"
     if model_family in ("veo3.1-components", "veo3.1-fast-components"):
@@ -271,7 +274,7 @@ def build_size_value(aspect_ratio: str, resolution: str):
 
 
 def get_backend_config(model_family: str):
-    if model_family == "LuxVid_video":
+    if model_family in ("LuxVid_video", "videos_stable_fast"):
         return {
             "api_base": LUXVID_BASE_URL,
             "api_key": LUXVID_API_KEY,
@@ -359,7 +362,7 @@ def get_allowed_resolutions(model_family: str):
 
 
 def get_allowed_seconds(model_family: str):
-    if model_family == "LuxVid_video":
+    if model_family in ("LuxVid_video", "videos_stable_fast"):
         return ["15"]
     if model_family == "seedance2渠道2":
         return ["5", "8", "10"]
@@ -956,6 +959,7 @@ def create_task():
         if model_family in PROMPT_RATIO_MODELS
         or model_family in (
             "LuxVid_video",
+            "videos_stable_fast",
             "seedance2渠道2",
             "grok-imagine-video-1.5-preview",
             "veo3.1-components",
