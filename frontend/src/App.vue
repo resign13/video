@@ -7,6 +7,7 @@ const tasks = ref([])
 const submitting = ref(false)
 const errorText = ref('')
 const filesInput = ref(null)
+const activeImageSlot = ref(null)
 const selectedTaskId = ref('')
 const taskPollTimer = ref(null)
 const workMode = ref('standard')
@@ -89,9 +90,40 @@ function setWorkMode(mode) {
 
 function onFilesChange(event) {
   const list = Array.from(event.target.files || [])
-  form.images = list.slice(0, maxImages.value)
-  if (list.length > maxImages.value) {
-    errorText.value = `当前模型最多允许 ${maxImages.value} 张参考图`
+  if (!list.length) return
+
+  if (activeImageSlot.value !== null) {
+    const index = activeImageSlot.value
+    const nextImages = [...form.images]
+    nextImages[index] = list[0]
+    form.images = nextImages.slice(0, maxImages.value)
+  } else {
+    const nextImages = [...form.images]
+    for (const file of list) {
+      if (nextImages.length >= maxImages.value) break
+      nextImages.push(file)
+    }
+    form.images = nextImages
+    if (list.length > maxImages.value) {
+      errorText.value = `当前模型最多允许 ${maxImages.value} 张参考图`
+    }
+  }
+
+  activeImageSlot.value = null
+  if (filesInput.value) {
+    filesInput.value.value = ''
+  }
+}
+
+function openImagePicker(index = null) {
+  activeImageSlot.value = index
+  filesInput.value?.click()
+}
+
+function removeImage(index) {
+  form.images = form.images.filter((_, itemIndex) => itemIndex !== index)
+  if (filesInput.value) {
+    filesInput.value.value = ''
   }
 }
 
@@ -295,22 +327,27 @@ onUnmounted(() => {
           </div>
 
           <div class="image-grid">
-            <label
+            <div
               v-for="index in maxImages"
               :key="index"
               class="image-slot"
               :class="{ filled: form.images[index - 1] }"
+              role="button"
+              tabindex="0"
+              @click="openImagePicker(index - 1)"
+              @keydown.enter.prevent="openImagePicker(index - 1)"
             >
               <template v-if="form.images[index - 1]">
                 <img :src="previewFileUrl(form.images[index - 1])" alt="" />
+                <button class="remove-image" title="移除图片" @click.stop="removeImage(index - 1)">×</button>
                 <span class="slot-file">{{ form.images[index - 1].name }}</span>
               </template>
               <template v-else>
                 <span class="slot-icon">⇪</span>
                 <span class="slot-title">图片 {{ index }}</span>
-                <span class="slot-hint">点击或拖入</span>
+                <span class="slot-hint">点击上传</span>
               </template>
-            </label>
+            </div>
           </div>
 
           <input
@@ -318,10 +355,10 @@ onUnmounted(() => {
             class="hidden-input"
             type="file"
             accept=".png,.jpg,.jpeg,.webp,.bmp"
-            multiple
+            :multiple="activeImageSlot === null"
             @change="onFilesChange"
           />
-          <button class="ghost upload-btn" @click="filesInput?.click()">选择参考图</button>
+          <button class="ghost upload-btn" @click="openImagePicker()">追加参考图</button>
 
           <textarea
             v-model="form.prompt"

@@ -644,3 +644,34 @@ input[type="file"] {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.image-slot {
+  cursor: pointer;
+}
+
+.image-slot:hover {
+  border-color: #8d63ff;
+  background: #262735;
+}
+
+.remove-image {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(255,255,255,.35);
+  border-radius: 50%;
+  background: rgba(0,0,0,.68);
+  color: #fff;
+  line-height: 18px;
+  padding: 0;
+  cursor: pointer;
+  z-index: 2;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.remove-image:hover {
+  background: #ff4d6d;
+  border-color: #ff8ca0;
+}
