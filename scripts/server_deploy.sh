@@ -47,15 +47,57 @@ npm ci || npm install
 npm run build
 
 cp "$APP_DIR/deploy/video-web.service" /etc/systemd/system/video-web.service
-cp "$APP_DIR/deploy/nginx-video.conf" /etc/nginx/sites-available/video
-ln -sf /etc/nginx/sites-available/video /etc/nginx/sites-enabled/video
-rm -f /etc/nginx/sites-enabled/default
 
 systemctl daemon-reload
 systemctl enable video-web.service
 systemctl restart video-web.service
-nginx -t
-systemctl reload nginx || systemctl restart nginx
+
+# 普通服务器用 Nginx 直接监听 80；如果服务器已有 Caddy/Docker 占用 80，
+# 则让 Nginx 监听 8088，并把 Caddy 的 video.smawell.shop 转发到 8088。
+if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' | grep -qx 'gingtto-caddy'; then
+  VIDEO_PORT="${VIDEO_PORT:-8088}"
+  cat >/etc/nginx/sites-available/video <<EOF
+server {
+    listen ${VIDEO_PORT};
+    server_name _;
+    client_max_body_size 80m;
+    root /opt/video/frontend/dist;
+    index index.html;
+    location /api/ {
+        proxy_pass http://127.0.0.1:5000/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_connect_timeout 180s;
+        proxy_send_timeout 180s;
+        proxy_read_timeout 180s;
+    }
+    location / { try_files \$uri \$uri/ /index.html; }
+}
+EOF
+  ln -sf /etc/nginx/sites-available/video /etc/nginx/sites-enabled/video
+  rm -f /etc/nginx/sites-enabled/default
+  nginx -t
+  systemctl restart nginx
+  if ! grep -q 'video.smawell.shop' /opt/gingtto/deploy/Caddyfile; then
+    cat >>/opt/gingtto/deploy/Caddyfile <<EOF
+
+http://video.smawell.shop {
+  encode zstd gzip
+  reverse_proxy 172.19.0.1:${VIDEO_PORT}
+}
+EOF
+  fi
+  docker exec gingtto-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile || true
+else
+  cp "$APP_DIR/deploy/nginx-video.conf" /etc/nginx/sites-available/video
+  ln -sf /etc/nginx/sites-available/video /etc/nginx/sites-enabled/video
+  rm -f /etc/nginx/sites-enabled/default
+  nginx -t
+  systemctl reload nginx || systemctl restart nginx
+fi
 
 echo "deployed ok"
 systemctl --no-pager --full status video-web.service | sed -n '1,12p'
