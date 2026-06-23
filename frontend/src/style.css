@@ -9,9 +9,18 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+}
+
 body {
   margin: 0;
   background: #202126;
+  overflow: hidden;
+  font-size: 14px;
 }
 
 button,
@@ -22,8 +31,8 @@ textarea {
 }
 
 .app-shell {
-  min-height: 100vh;
-  padding: 18px;
+  height: 100vh;
+  padding: 10px;
   background: #202126;
 }
 
@@ -31,34 +40,34 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 16px 18px;
+  gap: 7px;
+  padding: 10px 12px;
   border: 1px solid #2c2d36;
-  border-radius: 16px;
+  border-radius: 12px;
   background: #141419;
 }
 
 .topbar-left {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 7px;
 }
 
 .topbar-left h1 {
   margin: 0;
-  font-size: 22px;
+  font-size: 15px;
   font-weight: 800;
 }
 
 .topbar-left p {
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   color: #9a9aaa;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .back-btn {
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   border: none;
   border-radius: 12px;
   background: transparent;
@@ -69,12 +78,12 @@ textarea {
 .topbar-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 7px;
 }
 
 .path-box {
-  min-width: 300px;
-  padding: 10px 14px;
+  min-width: 220px;
+  padding: 8px 10px;
   border-radius: 14px;
   border: 1px solid #2e3040;
   background: #101117;
@@ -83,33 +92,37 @@ textarea {
 
 .workspace {
   display: grid;
-  grid-template-columns: 440px 1fr;
-  gap: 16px;
-  margin-top: 16px;
+  grid-template-columns: 390px minmax(0, 1fr);
+  gap: 7px;
+  margin-top: 10px;
+  height: calc(100vh - 82px);
+  overflow: hidden;
 }
 
 .left-panel,
 .preview-card,
 .history-card {
   border: 1px solid #2b2c35;
-  border-radius: 22px;
+  border-radius: 16px;
   background: #1a1a20;
 }
 
 .left-panel {
-  padding: 18px;
+  padding: 8px;
+  overflow: auto;
+  min-height: 0;
 }
 
 .brand-card {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
 
 .brand-icon {
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 30px;
   border-radius: 12px;
   display: grid;
   place-items: center;
@@ -118,15 +131,15 @@ textarea {
 }
 
 .brand-title {
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 800;
-  padding: 8px 12px;
+  padding: 6px 10px;
   border-radius: 10px;
   background: #23232b;
 }
 
 .field {
-  margin-top: 12px;
+  margin-top: 8px;
 }
 
 select,
@@ -137,20 +150,20 @@ input[type="file"] {
   border: 1px solid #303242;
   background: #101117;
   color: #f4f4f7;
-  padding: 12px 14px;
+  padding: 8px 10px;
 }
 
 .mode-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-  margin-top: 16px;
+  margin-top: 10px;
 }
 
 .mode-btn {
   border: 1px solid #343543;
   border-radius: 14px;
-  padding: 12px;
+  padding: 8px;
   background: #26262f;
   color: #f2f2f7;
   font-weight: 700;
@@ -162,21 +175,21 @@ input[type="file"] {
 }
 
 .hint {
-  margin: 14px 4px;
+  margin: 8px 4px;
   color: #868695;
   font-size: 12px;
 }
 
 .editor-card {
   border: 1px solid #32333e;
-  border-radius: 20px;
+  border-radius: 14px;
   background: #1b1b22;
-  padding: 14px;
+  padding: 10px;
 }
 
 .task-head-row {
   display: grid;
-  grid-template-columns: 1fr 88px 88px 88px;
+  grid-template-columns: 1fr 72px 72px 72px;
   gap: 8px;
   align-items: center;
 }
@@ -188,18 +201,18 @@ input[type="file"] {
 }
 
 .mini-select {
-  padding: 10px 10px;
+  padding: 7px 8px;
 }
 
 .image-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  margin-top: 14px;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .image-slot {
-  min-height: 92px;
+  min-height: 70px;
   border: 1px dashed #4a4c59;
   border-radius: 16px;
   background: #22232a;
@@ -221,13 +234,13 @@ input[type="file"] {
 .image-slot img {
   width: 100%;
   height: 100%;
-  min-height: 92px;
+  min-height: 70px;
   object-fit: cover;
 }
 
 .slot-icon {
   color: #b7b7c6;
-  font-size: 18px;
+  font-size: 15px;
 }
 
 .slot-title {
@@ -258,54 +271,60 @@ input[type="file"] {
 }
 
 .upload-btn {
-  margin-top: 12px;
+  margin-top: 8px;
 }
 
 .prompt-box {
   min-height: 260px;
-  margin-top: 12px;
+  margin-top: 8px;
   resize: vertical;
 }
 
 .footer-actions {
   display: grid;
   grid-template-columns: 1fr 1.8fr;
-  gap: 10px;
-  margin-top: 16px;
+  gap: 7px;
+  margin-top: 10px;
 }
 
 .right-panel {
   display: grid;
-  grid-template-rows: 1fr 280px;
-  gap: 16px;
+  grid-template-rows: minmax(0, 1fr) 230px;
+  gap: 7px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .preview-card {
   display: grid;
-  grid-template-columns: 1.8fr 360px;
-  gap: 14px;
-  padding: 16px;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  gap: 7px;
+  padding: 10px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .preview-surface {
   border: 1px solid #31333d;
-  border-radius: 18px;
+  border-radius: 14px;
   background: #1f2027;
-  padding: 12px;
+  padding: 8px;
 }
 
 .preview-surface video,
 .preview-surface img {
   width: 100%;
   height: 100%;
-  min-height: 540px;
+  min-height: 0;
+  height: 100%;
   object-fit: contain;
   border-radius: 16px;
   background: #06070b;
 }
 
 .preview-placeholder {
-  min-height: 540px;
+  min-height: 0;
+  height: 100%;
   border-radius: 16px;
   background: #06070b;
   display: grid;
@@ -316,19 +335,19 @@ input[type="file"] {
 
 .detail-panel {
   border: 1px solid #31333d;
-  border-radius: 18px;
+  border-radius: 14px;
   background: #1e1f26;
-  padding: 16px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 7px;
 }
 
 .badge {
   align-self: flex-start;
   border-radius: 12px;
-  padding: 6px 12px;
-  font-size: 13px;
+  padding: 4px 9px;
+  font-size: 12px;
   font-weight: 800;
 }
 
@@ -353,7 +372,7 @@ input[type="file"] {
 
 .detail-panel h3 {
   margin: 0;
-  font-size: 18px;
+  font-size: 15px;
 }
 
 .meta-card,
@@ -366,21 +385,23 @@ input[type="file"] {
   border: 1px solid #2c2f3b;
   border-radius: 14px;
   background: #101117;
-  padding: 12px;
+  padding: 8px;
 }
 
 .prompt-view {
-  min-height: 140px;
+  min-height: 76px;
+  max-height: 110px;
+  overflow: auto;
   white-space: pre-wrap;
 }
 
 .single-line {
-  min-height: 44px;
+  min-height: 34px;
   word-break: break-all;
 }
 
 .log-box {
-  min-height: 120px;
+  min-height: 78px;
   white-space: pre-wrap;
   overflow: auto;
 }
@@ -388,12 +409,12 @@ input[type="file"] {
 .preview-actions {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  gap: 7px;
   margin-top: auto;
 }
 
 .history-card {
-  padding: 16px;
+  padding: 10px;
 }
 
 .history-head {
@@ -404,14 +425,14 @@ input[type="file"] {
 }
 
 .history-title {
-  font-size: 18px;
+  font-size: 15px;
   font-weight: 800;
 }
 
 .history-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 7px;
 }
 
 .history-note {
@@ -420,18 +441,18 @@ input[type="file"] {
 }
 
 .history-list {
-  margin-top: 14px;
-  height: 210px;
+  margin-top: 8px;
+  height: 174px;
   overflow: auto;
   display: grid;
-  gap: 10px;
+  gap: 7px;
 }
 
 .history-item {
   border: 1px solid #2d2f38;
   border-radius: 16px;
   background: #202129;
-  padding: 12px;
+  padding: 8px;
   cursor: pointer;
 }
 
@@ -443,7 +464,7 @@ input[type="file"] {
 .history-top {
   display: flex;
   justify-content: space-between;
-  gap: 10px;
+  gap: 7px;
 }
 
 .history-item-title {
@@ -483,8 +504,8 @@ input[type="file"] {
 }
 
 .history-images img {
-  width: 48px;
-  height: 48px;
+  width: 36px;
+  height: 36px;
   border-radius: 10px;
   object-fit: cover;
   border: 1px solid #363848;
@@ -493,7 +514,7 @@ input[type="file"] {
 .history-bottom {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 7px;
   margin-top: 10px;
 }
 
@@ -513,7 +534,7 @@ input[type="file"] {
 .primary,
 .ghost {
   border-radius: 14px;
-  padding: 12px 16px;
+  padding: 6px 10px;
   color: #fff;
 }
 
@@ -529,7 +550,7 @@ input[type="file"] {
 }
 
 .small {
-  padding: 8px 12px;
+  padding: 6px 10px;
 }
 
 .tiny {
@@ -539,5 +560,67 @@ input[type="file"] {
 
 .error {
   color: #ff7878;
-  margin-top: 12px;
+  margin-top: 8px;
+}
+
+
+/* Compact deployment layout: keep the whole workbench visible on common laptop screens. */
+.preview-surface,
+.preview-card,
+.right-panel,
+.history-card,
+.history-list {
+  min-height: 0;
+}
+
+.preview-surface video,
+.preview-surface img,
+.preview-placeholder {
+  height: 100%;
+  max-height: 100%;
+}
+
+.detail-panel {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.log-box {
+  flex: 1;
+  max-height: 130px;
+}
+
+@media (max-height: 820px) {
+  .topbar-left p,
+  .hint,
+  .history-note {
+    display: none;
+  }
+  .workspace {
+    height: calc(100vh - 66px);
+  }
+  .image-slot {
+    min-height: 58px;
+  }
+  .prompt-box {
+    min-height: 110px;
+  }
+  .right-panel {
+    grid-template-rows: minmax(0, 1fr) 190px;
+  }
+  .history-list {
+    height: 138px;
+  }
+}
+
+@media (max-width: 1280px) {
+  .workspace {
+    grid-template-columns: 360px minmax(0, 1fr);
+  }
+  .preview-card {
+    grid-template-columns: minmax(0, 1fr) 300px;
+  }
+  .path-box {
+    min-width: 160px;
+  }
 }
