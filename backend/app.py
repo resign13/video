@@ -1,4 +1,4 @@
-﻿import base64
+import base64
 import os
 import shutil
 import threading
@@ -133,11 +133,11 @@ MODEL_OPTIONS = [
     {"label": "LuxVid_video", "value": "LuxVid_video"},
     {"label": "videos_stable_fast", "value": "videos_stable_fast"},
     {"label": "grok-imagine-video-1.5-preview", "value": "grok-imagine-video-1.5-preview"},
-    {"label": "veo3.1-components", "value": "veo3.1-components"},
-    {"label": "veo3.1-fast-components", "value": "veo3.1-fast-components"},
+    # hidden temporarily: veo3.1-components
+    # hidden temporarily: veo3.1-fast-components
     {"label": "veo_3_1_pro_stable", "value": "veo_3_1_pro_stable"},
     {"label": "veo_3_1_fast", "value": "veo_3_1_fast"},
-    {"label": "veo_3_1_pro", "value": "veo_3_1_pro"},
+    # hidden temporarily: veo_3_1_pro
 ]
 
 def ensure_dir(path: Path):
