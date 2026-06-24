@@ -130,8 +130,8 @@ MODEL_MATRIX = {
 }
 
 MODEL_OPTIONS = [
-    {"label": "LuxVid_video", "value": "LuxVid_video"},
-    {"label": "videos_stable_fast", "value": "videos_stable_fast"},
+    {"label": "seedance2", "value": "LuxVid_video"},
+    {"label": "seedance2 fast", "value": "videos_stable_fast"},
     {"label": "grok-imagine-video-1.5-preview", "value": "grok-imagine-video-1.5-preview"},
     # hidden temporarily: veo3.1-components
     # hidden temporarily: veo3.1-fast-components
