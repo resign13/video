@@ -352,6 +352,8 @@ def build_request_prompt(model_family: str, prompt: str, aspect_ratio: str):
 def get_max_images_for_model(model_family: str):
     if model_family == "grok-imagine-video-1.5-preview":
         return 7
+    if model_family in ("LuxVid_video", "videos_stable_fast"):
+        return 4
     if model_family in ("veo3.1-components", "veo3.1-fast-components") or model_family in VEO_STABLE_MODELS:
         return 3
     return 9
@@ -369,7 +371,7 @@ def get_allowed_resolutions(model_family: str):
 
 def get_allowed_seconds(model_family: str):
     if model_family in ("LuxVid_video", "videos_stable_fast"):
-        return ["15"]
+        return [str(value) for value in range(4, 16)]
     if model_family == "grok-imagine-video-1.5-preview":
         return ["6", "10"]
     if model_family in ("veo3.1-components", "veo3.1-fast-components") or model_family in VEO_STABLE_MODELS:
@@ -501,7 +503,7 @@ class WebTaskRunner:
             payload = {
                 "model": task["model_id"],
                 "prompt": task["prompt"],
-                "duration": 15,
+                "duration": int(str(task["seconds"])),
                 "ratio": task["aspect_ratio"],
                 "resolution": "720p",
                 "referenceImages": reference_images,
@@ -876,7 +878,7 @@ def models():
                 "max_images": get_max_images_for_model(model_family),
                 "resolutions": get_allowed_resolutions(model_family),
                 "seconds_options": get_allowed_seconds(model_family),
-                "aspect_ratios": ["16:9", "9:16"] if model_family in VEO_STABLE_MODELS else ["16:9", "9:16", "4:3", "3:4", "1:1", "21:9"],
+                "aspect_ratios": ["16:9", "9:16", "1:1"] if model_family in ("LuxVid_video", "videos_stable_fast") else (["16:9", "9:16"] if model_family in VEO_STABLE_MODELS else ["16:9", "9:16", "4:3", "3:4", "1:1", "21:9"]),
                 "needs_api_key": item.get("needs_api_key", False),
             }
         )
