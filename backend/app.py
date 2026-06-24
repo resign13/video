@@ -1,4 +1,4 @@
-import base64
+﻿import base64
 import os
 import shutil
 import threading
@@ -1025,3 +1025,4 @@ if __name__ == "__main__":
         port=int(env_value("FLASK_PORT", "5000")),
         debug=env_value("FLASK_DEBUG", "0") == "1",
     )
+
