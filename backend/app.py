@@ -581,6 +581,7 @@ class WebTaskRunner:
             headers["Content-Type"] = "application/json"
             headers["Accept"] = "application/json"
             self.log(
+                task["id"],
                 "submit payload => "
                 f"model={payload.get('model')}, "
                 f"aspect_ratio={payload.get('aspect_ratio')}, "
