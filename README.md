@@ -56,3 +56,6 @@ bash scripts/server_deploy.sh
 - grok-imagine-video-1.5-preview
 - veo3.1-components
 - veo3.1-fast-components
+- videos_stable_fast
+- veo_3_1_pro_stable
+- veo_3_1_fast

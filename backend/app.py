@@ -62,6 +62,7 @@ SEEDANCE2_API_KEY = env_value("SEEDANCE2_API_KEY")
 HANCAT_API_KEY = env_value("HANCAT_API_KEY")
 GROK_IMAGINE_API_KEY = env_value("GROK_IMAGINE_API_KEY")
 LUXVID_API_KEY = env_value("LUXVID_API_KEY")
+VEO_STABLE_API_KEY = env_value("VEO_STABLE_API_KEY", LUXVID_API_KEY)
 IMGBB_API_KEY = env_value("IMGBB_API_KEY")
 SORA_VIP3_API_KEY = env_value("SORA_VIP3_API_KEY")
 SORA_VIP3_1080_API_KEY = env_value("SORA_VIP3_1080_API_KEY")
@@ -79,6 +80,7 @@ SECONDS_OPTIONS = ["5", "10", "15"]
 
 PROMPT_RATIO_MODELS = {"seedance2", "jimeng-video-3.5-pro-12s", "sora-2-12s"}
 LOW_RES_ONLY_MODELS = {"LuxVid_video", "videos_stable_fast", "grok-imagine-video-1.5-preview"}
+VEO_STABLE_MODELS = {"veo_3_1_pro_stable", "veo_3_1_fast", "veo_3_1_pro"}
 
 MODEL_MATRIX = {
     "veo3 fast": {
@@ -133,6 +135,9 @@ MODEL_OPTIONS = [
     {"label": "grok-imagine-video-1.5-preview", "value": "grok-imagine-video-1.5-preview"},
     {"label": "veo3.1-components", "value": "veo3.1-components"},
     {"label": "veo3.1-fast-components", "value": "veo3.1-fast-components"},
+    {"label": "veo_3_1_pro_stable", "value": "veo_3_1_pro_stable"},
+    {"label": "veo_3_1_fast", "value": "veo_3_1_fast"},
+    {"label": "veo_3_1_pro", "value": "veo_3_1_pro"},
 ]
 
 def ensure_dir(path: Path):
@@ -237,6 +242,8 @@ def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
         return "gemini-veo-3.1-generate-preview-ref-8s"
     if model_family == "grok-imagine-video-1.5-preview":
         return model_family
+    if model_family in VEO_STABLE_MODELS:
+        return model_family
     if model_family == "longxia-seedance-2.0":
         return "LongXia-G-Seedance-2.0"
     if model_family == "sora-vip3-pro-1080p":
@@ -290,6 +297,13 @@ def get_backend_config(model_family: str):
             "auth_mode": "bearer",
             "request_mode": "hancat_videos_async",
         }
+    if model_family in VEO_STABLE_MODELS:
+        return {
+            "api_base": LUXVID_BASE_URL,
+            "api_key": VEO_STABLE_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "zcb_veo_videos_async",
+        }
     if model_family == "sora-vip3-pro-1080p":
         return {
             "api_base": SORA_VIP3_1080_BASE_URL,
@@ -338,7 +352,7 @@ def build_request_prompt(model_family: str, prompt: str, aspect_ratio: str):
 def get_max_images_for_model(model_family: str):
     if model_family == "grok-imagine-video-1.5-preview":
         return 7
-    if model_family in ("veo3.1-components", "veo3.1-fast-components"):
+    if model_family in ("veo3.1-components", "veo3.1-fast-components") or model_family in VEO_STABLE_MODELS:
         return 3
     return 9
 
@@ -346,6 +360,10 @@ def get_max_images_for_model(model_family: str):
 def get_allowed_resolutions(model_family: str):
     if model_family in ("veo3.1-components", "veo3.1-fast-components"):
         return ["1080p"]
+    if model_family == "veo_3_1_pro_stable":
+        return ["720p", "1080p"]
+    if model_family in ("veo_3_1_fast", "veo_3_1_pro"):
+        return ["720p", "1080p", "4K"]
     return ["720p"]
 
 
@@ -354,7 +372,7 @@ def get_allowed_seconds(model_family: str):
         return ["15"]
     if model_family == "grok-imagine-video-1.5-preview":
         return ["6", "10"]
-    if model_family in ("veo3.1-components", "veo3.1-fast-components"):
+    if model_family in ("veo3.1-components", "veo3.1-fast-components") or model_family in VEO_STABLE_MODELS:
         return ["8"]
     return SECONDS_OPTIONS
 
@@ -551,6 +569,37 @@ class WebTaskRunner:
             data = response.json()
             return data.get("task_id") or data.get("id") or data.get("taskId")
 
+        if request_mode == "zcb_veo_videos_async":
+            reference_images = [upload_image_to_imgbb(Path(path)) for path in task["image_paths"][:3]]
+            payload = {
+                "model": task["model_id"],
+                "prompt": task["prompt"],
+                "resolution": task["resolution"],
+                "aspect_ratio": task["aspect_ratio"],
+                "input_reference": reference_images,
+            }
+            headers["Content-Type"] = "application/json"
+            headers["Accept"] = "application/json"
+            self.log(
+                "submit payload => "
+                f"model={payload.get('model')}, "
+                f"aspect_ratio={payload.get('aspect_ratio')}, "
+                f"resolution={payload.get('resolution')}, "
+                f"input_reference={len(reference_images)}"
+            )
+            response = self.request_with_retry(
+                "post",
+                f"{task['api_base']}/v1/veo/videos",
+                headers=headers,
+                json=payload,
+                timeout=120,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if data.get("error"):
+                raise RuntimeError(str(data.get("error")))
+            return data.get("task_id") or data.get("id") or data.get("taskId")
+
         if request_mode == "sora_vip3_multi_image":
             reference_urls = [process_image_to_data_url(Path(path)) for path in task["image_paths"]]
             payload = {
@@ -652,7 +701,7 @@ class WebTaskRunner:
         interval = LONGXIA_POLL_INTERVAL_SECONDS if request_mode == "longxia_videos_async" else POLL_INTERVAL_SECONDS
 
         while True:
-            if request_mode == "luxvid_videos_async":
+            if request_mode in ("luxvid_videos_async", "zcb_veo_videos_async"):
                 poll_url = f"{task['api_base']}/v1/result/{remote_task_id}"
             elif request_mode in ("videos_async", "sora_vip3_multi_image", "longxia_videos_async", "grok_imagine_videos_async", "hancat_videos_async"):
                 poll_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
@@ -660,10 +709,17 @@ class WebTaskRunner:
                 poll_url = f"{task['api_base']}/v1/tasks/{remote_task_id}"
 
             response = self.request_with_retry("get", poll_url, headers=headers, timeout=60)
+            if response.status_code == 404 and request_mode == "zcb_veo_videos_async":
+                response = self.request_with_retry(
+                    "get",
+                    f"{task['api_base']}/v1/veo/videos/{remote_task_id}",
+                    headers=headers,
+                    timeout=60,
+                )
             response.raise_for_status()
             raw_data = response.json()
-            if request_mode == "luxvid_videos_async":
-                data = raw_data
+            if request_mode in ("luxvid_videos_async", "zcb_veo_videos_async"):
+                data = raw_data.get("data", raw_data) if isinstance(raw_data, dict) else {}
             elif request_mode == "longxia_videos_async":
                 data = raw_data.get("data", raw_data)
             else:
@@ -819,7 +875,7 @@ def models():
                 "max_images": get_max_images_for_model(model_family),
                 "resolutions": get_allowed_resolutions(model_family),
                 "seconds_options": get_allowed_seconds(model_family),
-                "aspect_ratios": ["16:9", "9:16", "4:3", "3:4", "1:1", "21:9"],
+                "aspect_ratios": ["16:9", "9:16"] if model_family in VEO_STABLE_MODELS else ["16:9", "9:16", "4:3", "3:4", "1:1", "21:9"],
                 "needs_api_key": item.get("needs_api_key", False),
             }
         )
@@ -919,6 +975,9 @@ def create_task():
             "grok-imagine-video-1.5-preview",
             "veo3.1-components",
             "veo3.1-fast-components",
+            "veo_3_1_pro_stable",
+            "veo_3_1_fast",
+            "veo_3_1_pro",
         )
         else build_size_value(aspect_ratio, resolution)
     )
