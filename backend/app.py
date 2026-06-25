@@ -79,7 +79,7 @@ CLEANUP_INTERVAL_SECONDS = 10 * 60
 SECONDS_OPTIONS = ["5", "10", "15"]
 
 PROMPT_RATIO_MODELS = {"seedance2", "jimeng-video-3.5-pro-12s", "sora-2-12s"}
-LOW_RES_ONLY_MODELS = {"LuxVid_video", "videos_stable_fast", "grok-imagine-video-1.5-preview"}
+LOW_RES_ONLY_MODELS = {"videos", "LuxVid_video", "videos_stable_fast", "grok-imagine-video-1.5-preview"}
 VEO_STABLE_MODELS = {"veo_3_1_pro_stable", "veo_3_1_fast", "veo_3_1_pro"}
 
 MODEL_MATRIX = {
@@ -130,6 +130,7 @@ MODEL_MATRIX = {
 }
 
 MODEL_OPTIONS = [
+    {"label": "videos", "value": "videos"},
     {"label": "seedance2", "value": "LuxVid_video"},
     {"label": "seedance2 fast", "value": "videos_stable_fast"},
     {"label": "grok-imagine-video-1.5-preview", "value": "grok-imagine-video-1.5-preview"},
@@ -234,6 +235,8 @@ def normalize_video_url(url: str, api_base: str):
 
 
 def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
+    if model_family == "videos":
+        return "videos"
     if model_family == "LuxVid_video":
         return "videos_stable"
     if model_family == "videos_stable_fast":
@@ -276,7 +279,7 @@ def build_size_value(aspect_ratio: str, resolution: str):
 
 
 def get_backend_config(model_family: str):
-    if model_family in ("LuxVid_video", "videos_stable_fast"):
+    if model_family in ("videos", "LuxVid_video", "videos_stable_fast"):
         return {
             "api_base": LUXVID_BASE_URL,
             "api_key": LUXVID_API_KEY,
@@ -352,6 +355,8 @@ def build_request_prompt(model_family: str, prompt: str, aspect_ratio: str):
 def get_max_images_for_model(model_family: str):
     if model_family == "grok-imagine-video-1.5-preview":
         return 7
+    if model_family == "videos":
+        return 9
     if model_family in ("LuxVid_video", "videos_stable_fast"):
         return 4
     if model_family in ("veo3.1-components", "veo3.1-fast-components") or model_family in VEO_STABLE_MODELS:
@@ -370,7 +375,7 @@ def get_allowed_resolutions(model_family: str):
 
 
 def get_allowed_seconds(model_family: str):
-    if model_family in ("LuxVid_video", "videos_stable_fast"):
+    if model_family in ("videos", "LuxVid_video", "videos_stable_fast"):
         return [str(value) for value in range(4, 16)]
     if model_family == "grok-imagine-video-1.5-preview":
         return ["6", "10"]
@@ -878,7 +883,7 @@ def models():
                 "max_images": get_max_images_for_model(model_family),
                 "resolutions": get_allowed_resolutions(model_family),
                 "seconds_options": get_allowed_seconds(model_family),
-                "aspect_ratios": ["16:9", "9:16", "1:1"] if model_family in ("LuxVid_video", "videos_stable_fast") else (["16:9", "9:16"] if model_family in VEO_STABLE_MODELS else ["16:9", "9:16", "4:3", "3:4", "1:1", "21:9"]),
+                "aspect_ratios": ["16:9", "9:16", "1:1"] if model_family in ("LuxVid_video", "videos_stable_fast") else (["16:9", "9:16"] if model_family in VEO_STABLE_MODELS else ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]),
                 "needs_api_key": item.get("needs_api_key", False),
             }
         )
@@ -973,6 +978,7 @@ def create_task():
         ""
         if model_family in PROMPT_RATIO_MODELS
         or model_family in (
+            "videos",
             "LuxVid_video",
             "videos_stable_fast",
             "grok-imagine-video-1.5-preview",

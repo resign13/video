@@ -54,6 +54,9 @@ watch(selectedModel, (model) => {
   if (!model.seconds_options.includes(form.seconds)) {
     form.seconds = model.seconds_options[0]
   }
+  if (!model.aspect_ratios.includes(form.aspect_ratio)) {
+    form.aspect_ratio = model.aspect_ratios[0]
+  }
   if (form.images.length > model.max_images) {
     form.images = form.images.slice(0, model.max_images)
   }
@@ -92,27 +95,101 @@ function onFilesChange(event) {
   const list = Array.from(event.target.files || [])
   if (!list.length) return
 
-  if (activeImageSlot.value !== null) {
-    const index = activeImageSlot.value
-    const nextImages = [...form.images]
-    nextImages[index] = list[0]
-    form.images = nextImages.slice(0, maxImages.value)
-  } else {
-    const nextImages = [...form.images]
-    for (const file of list) {
-      if (nextImages.length >= maxImages.value) break
-      nextImages.push(file)
-    }
-    form.images = nextImages
-    if (list.length > maxImages.value) {
-      errorText.value = `当前模型最多允许 ${maxImages.value} 张参考图`
-    }
-  }
-
+  appendImageFiles(list, activeImageSlot.value)
   activeImageSlot.value = null
   if (filesInput.value) {
     filesInput.value.value = ''
   }
+}
+
+function isImageFile(file) {
+  return Boolean(file)
+    && (file.type?.startsWith('image/') || /\.(png|jpe?g|webp|bmp)$/i.test(file.name || ''))
+}
+
+function appendImageFiles(files, replaceIndex = null) {
+  const imageFiles = Array.from(files || []).filter(isImageFile)
+  if (!imageFiles.length) {
+    errorText.value = '未找到可上传的图片'
+    return
+  }
+
+  if (replaceIndex !== null && replaceIndex !== undefined) {
+    const index = replaceIndex
+    const nextImages = [...form.images]
+    nextImages[index] = imageFiles[0]
+    form.images = nextImages.slice(0, maxImages.value)
+  } else {
+    const nextImages = [...form.images]
+    const availableCount = Math.max(0, maxImages.value - nextImages.length)
+    for (const file of imageFiles) {
+      if (nextImages.length >= maxImages.value) break
+      nextImages.push(file)
+    }
+    form.images = nextImages
+    if (imageFiles.length > availableCount) {
+      errorText.value = `当前模型最多允许 ${maxImages.value} 张参考图`
+    } else {
+      errorText.value = ''
+    }
+  }
+}
+
+function readFileEntry(entry) {
+  return new Promise(resolve => {
+    entry.file(file => resolve(file), () => resolve(null))
+  })
+}
+
+function readDirectoryBatch(reader) {
+  return new Promise((resolve, reject) => {
+    reader.readEntries(resolve, reject)
+  })
+}
+
+async function collectFilesFromEntry(entry) {
+  if (!entry) return []
+  if (entry.isFile) {
+    const file = await readFileEntry(entry)
+    return file ? [file] : []
+  }
+  if (!entry.isDirectory) return []
+
+  const reader = entry.createReader()
+  const files = []
+  while (true) {
+    const entries = await readDirectoryBatch(reader)
+    if (!entries.length) break
+    const nestedFiles = await Promise.all(entries.map(item => collectFilesFromEntry(item)))
+    files.push(...nestedFiles.flat())
+  }
+  return files
+}
+
+async function getDroppedFiles(dataTransfer) {
+  const items = Array.from(dataTransfer?.items || [])
+  if (!items.length) {
+    return Array.from(dataTransfer?.files || [])
+  }
+
+  const files = []
+  for (const item of items) {
+    if (item.kind !== 'file') continue
+    const entry = item.webkitGetAsEntry?.()
+    if (entry) {
+      files.push(...await collectFilesFromEntry(entry))
+    } else {
+      const file = item.getAsFile?.()
+      if (file) files.push(file)
+    }
+  }
+  return files
+}
+
+async function onImageDrop(event) {
+  activeImageSlot.value = null
+  const files = await getDroppedFiles(event.dataTransfer)
+  appendImageFiles(files)
 }
 
 function openImagePicker(index = null) {
@@ -322,7 +399,12 @@ onUnmounted(() => {
             </select>
           </div>
 
-          <div class="image-grid">
+          <div
+            class="image-grid"
+            @dragenter.prevent.stop
+            @dragover.prevent.stop
+            @drop.prevent.stop="onImageDrop"
+          >
             <div
               v-for="index in maxImages"
               :key="index"
