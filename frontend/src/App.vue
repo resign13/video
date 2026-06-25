@@ -21,6 +21,7 @@ const form = reactive({
   prompt: '',
   images: [],
   api_key: '',
+  auto_face: false,
 })
 
 const selectedModel = computed(() => {
@@ -46,6 +47,8 @@ const selectedTask = computed(() => {
   return tasks.value.find(item => item.id === selectedTaskId.value) || null
 })
 
+const supportsAutoFace = computed(() => form.model_family === 'videos')
+
 watch(selectedModel, (model) => {
   if (!model) return
   if (!model.resolutions.includes(form.resolution)) {
@@ -59,6 +62,9 @@ watch(selectedModel, (model) => {
   }
   if (form.images.length > model.max_images) {
     form.images = form.images.slice(0, model.max_images)
+  }
+  if (form.model_family !== 'videos') {
+    form.auto_face = false
   }
 }, { immediate: true })
 
@@ -239,6 +245,9 @@ async function createRemoteTask(promptText) {
   payload.append('resolution', form.resolution)
   payload.append('seconds', form.seconds)
   payload.append('prompt', promptText)
+  if (supportsAutoFace.value) {
+    payload.append('auto_face', form.auto_face ? 'true' : 'false')
+  }
   if (form.api_key.trim()) {
     payload.append('api_key', form.api_key.trim())
   }
@@ -361,6 +370,11 @@ onUnmounted(() => {
             placeholder="填写 API Key"
           />
         </div>
+
+        <label v-if="supportsAutoFace" class="face-option">
+          <input v-model="form.auto_face" type="checkbox" />
+          <span>自动人脸处理</span>
+        </label>
 
         <div class="mode-row">
           <button

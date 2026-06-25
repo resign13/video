@@ -757,3 +757,19 @@ input[type="file"] {
 .preview-actions.single-action {
   grid-template-columns: 1fr;
 }
+
+.face-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 4px 0;
+  color: #e7e7ef;
+  font-size: 13px;
+  user-select: none;
+}
+
+.face-option input {
+  width: 15px;
+  height: 15px;
+  accent-color: #7f46ff;
+}

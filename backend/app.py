@@ -513,6 +513,8 @@ class WebTaskRunner:
                 "resolution": "720p",
                 "referenceImages": reference_images,
             }
+            if task["model_id"] == "videos":
+                payload["autoFace"] = bool(task.get("auto_face"))
             headers["Content-Type"] = "application/json"
             response = self.request_with_retry(
                 "post",
@@ -942,6 +944,7 @@ def create_task():
     seconds = str(request.form.get("seconds") or "5").strip()
     files = request.files.getlist("images")
     manual_api_key = (request.form.get("api_key") or "").strip()
+    auto_face = str(request.form.get("auto_face") or "").strip().lower() in ("1", "true", "yes", "on")
 
     if not model_family:
         return jsonify({"error": "missing model_family"}), 400
@@ -1007,6 +1010,7 @@ def create_task():
         "aspect_ratio": aspect_ratio,
         "resolution": resolution,
         "seconds": seconds,
+        "auto_face": auto_face if model_family == "videos" else False,
         "prompt": prompt,
         "image_paths": image_paths,
         "size_value": size_value,
