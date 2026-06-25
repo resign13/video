@@ -12,6 +12,7 @@ const selectedTaskId = ref('')
 const taskPollTimer = ref(null)
 const workMode = ref('standard')
 const batchCount = ref(3)
+const previewUrlCache = new WeakMap()
 
 const form = reactive({
   model_family: 'LuxVid_video',
@@ -139,6 +140,11 @@ function appendImageFiles(files, replaceIndex = null) {
   }
 }
 
+function isDirectoryItem(item) {
+  const entry = item?.webkitGetAsEntry?.()
+  return Boolean(entry?.isDirectory)
+}
+
 function readFileEntry(entry) {
   return new Promise(resolve => {
     entry.file(file => resolve(file), () => resolve(null))
@@ -172,8 +178,15 @@ async function collectFilesFromEntry(entry) {
 
 async function getDroppedFiles(dataTransfer) {
   const items = Array.from(dataTransfer?.items || [])
+  const directFiles = Array.from(dataTransfer?.files || [])
+  const hasDirectory = items.some(isDirectoryItem)
+  const fileItemCount = items.filter(item => item.kind === 'file').length
+
+  if (!hasDirectory && directFiles.length && directFiles.length >= fileItemCount) {
+    return directFiles
+  }
   if (!items.length) {
-    return Array.from(dataTransfer?.files || [])
+    return directFiles
   }
 
   const files = []
@@ -187,7 +200,15 @@ async function getDroppedFiles(dataTransfer) {
       if (file) files.push(file)
     }
   }
+  const seen = new Set()
   return files
+    .filter(file => {
+      const key = `${file.name}_${file.size}_${file.lastModified}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name, 'zh-CN', { numeric: true }))
 }
 
 async function onImageDrop(event) {
@@ -317,7 +338,10 @@ function openPreview(task) {
 }
 
 function previewFileUrl(file) {
-  return URL.createObjectURL(file)
+  if (!previewUrlCache.has(file)) {
+    previewUrlCache.set(file, URL.createObjectURL(file))
+  }
+  return previewUrlCache.get(file)
 }
 
 onMounted(async () => {
