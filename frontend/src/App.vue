@@ -63,9 +63,7 @@ watch(selectedModel, (model) => {
   if (form.images.length > model.max_images) {
     form.images = form.images.slice(0, model.max_images)
   }
-  if (form.model_family !== 'videos') {
-    form.auto_face = false
-  }
+  form.auto_face = form.model_family === 'videos'
 }, { immediate: true })
 
 watch(tasks, (list) => {
