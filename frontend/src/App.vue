@@ -12,6 +12,7 @@ const selectedTaskId = ref('')
 const taskPollTimer = ref(null)
 const workMode = ref('standard')
 const batchCount = ref(3)
+const rerunningTaskId = ref('')
 const previewUrlCache = new WeakMap()
 
 const form = reactive({
@@ -327,6 +328,28 @@ async function submitTask() {
   }
 }
 
+
+async function rerunTask(task) {
+  if (!task?.id || rerunningTaskId.value) return
+  rerunningTaskId.value = task.id
+  errorText.value = ''
+  try {
+    const res = await fetch(`${backendBase}/api/tasks/${task.id}/rerun`, { method: 'POST' })
+    const data = await res.json()
+    if (!res.ok) {
+      throw new Error(data.error || '重新提交失败')
+    }
+    await loadTasks()
+    if (data?.id) {
+      selectedTaskId.value = data.id
+    }
+  } catch (error) {
+    errorText.value = error.message || '重新提交失败'
+  } finally {
+    rerunningTaskId.value = ''
+  }
+}
+
 function openDownload(task) {
   if (!task?.download_url) return
   window.open(task.download_url, '_blank')
@@ -572,6 +595,9 @@ onUnmounted(() => {
                 <div class="mini-progress">
                   <div class="mini-progress-bar" :style="{ width: `${task.progress || 0}%` }"></div>
                 </div>
+                <button class="ghost tiny" :disabled="rerunningTaskId === task.id" @click.stop="rerunTask(task)">
+                  {{ rerunningTaskId === task.id ? '提交中' : '重新提交' }}
+                </button>
                 <button class="ghost tiny" :disabled="!task.download_url" @click.stop="openDownload(task)">下载</button>
               </div>
             </div>

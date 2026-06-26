@@ -773,3 +773,7 @@ input[type="file"] {
   height: 15px;
   accent-color: #7f46ff;
 }
+
+.history-bottom .tiny {
+  white-space: nowrap;
+}

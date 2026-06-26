@@ -935,6 +935,75 @@ def get_task_image(task_id: str, image_index: int):
     return send_file(image_path)
 
 
+@app.post("/api/tasks/<task_id>/rerun")
+def rerun_task(task_id: str):
+    with TASK_LOCK:
+        source = TASKS.get(task_id)
+        if not source:
+            return jsonify({"error": "task not found"}), 404
+        source_copy = dict(source)
+
+    source_images = source_copy.get("image_paths") or []
+    if not source_images:
+        return jsonify({"error": "source task has no images"}), 400
+
+    request_id = uuid.uuid4().hex[:10]
+    task_upload_dir = UPLOAD_DIR / request_id
+    ensure_dir(task_upload_dir)
+    image_paths: List[str] = []
+    try:
+        for index, image_path in enumerate(source_images, start=1):
+            src = Path(image_path)
+            if not src.exists():
+                raise FileNotFoundError(f"source image missing: {src.name}")
+            suffix = src.suffix or ".jpg"
+            dst_name = secure_filename(src.name) or f"image_{index}{suffix}"
+            dst = task_upload_dir / dst_name
+            if dst.exists():
+                dst = task_upload_dir / f"image_{index}{suffix}"
+            shutil.copy2(src, dst)
+            image_paths.append(str(dst))
+    except Exception as exc:
+        safe_remove_path(task_upload_dir)
+        return jsonify({"error": str(exc)}), 400
+
+    task = {
+        "id": request_id,
+        "display_id": f"task_{request_id}",
+        "remote_task_id": "",
+        "created_at": now_text(),
+        "created_ts": time.time(),
+        "status": "queued",
+        "status_text": "queued",
+        "progress": 0,
+        "error": "",
+        "model_family": source_copy.get("model_family"),
+        "model_id": source_copy.get("model_id"),
+        "aspect_ratio": source_copy.get("aspect_ratio"),
+        "resolution": source_copy.get("resolution"),
+        "seconds": source_copy.get("seconds"),
+        "auto_face": bool(source_copy.get("auto_face")),
+        "prompt": source_copy.get("prompt", ""),
+        "image_paths": image_paths,
+        "size_value": source_copy.get("size_value", ""),
+        "api_base": source_copy.get("api_base"),
+        "api_key": source_copy.get("api_key"),
+        "auth_mode": source_copy.get("auth_mode"),
+        "request_mode": source_copy.get("request_mode"),
+        "remote_url": "",
+        "local_path": "",
+        "duration_seconds": None,
+        "logs": [f"[{short_now()}] task recreated from {source_copy.get('display_id') or task_id}"],
+    }
+
+    thread = threading.Thread(target=RUNNER.run_task, args=(request_id,), daemon=True)
+    task["thread"] = thread
+    with TASK_LOCK:
+        TASKS[request_id] = task
+    thread.start()
+    return jsonify(serialize_task(task)), 202
+
+
 @app.post("/api/tasks")
 def create_task():
     model_family = (request.form.get("model_family") or "").strip()
