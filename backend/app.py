@@ -569,12 +569,7 @@ class WebTaskRunner:
         if request_mode == "xs_sora_videos_async":
             reference_images = [upload_image_to_imgbb(Path(path)) for path in task["image_paths"][:4]]
             image_count = len(reference_images)
-            if image_count == 1:
-                reference_mode = "start_frame"
-            elif image_count == 2:
-                reference_mode = "image_reference"
-            else:
-                reference_mode = "image_reference"
+            reference_mode = "image_reference"
             payload = {
                 "model": task["model_id"],
                 "prompt": task["prompt"],
