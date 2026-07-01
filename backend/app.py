@@ -241,7 +241,7 @@ def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
     if model_family == "videos":
         return "videos"
     if model_family == "wy-sd2":
-        return "wy-sd2"
+        return "seedance2.0-fast"
     if model_family == "LuxVid_video":
         return "videos_stable"
     if model_family == "videos_stable_fast":
@@ -389,9 +389,7 @@ def get_allowed_resolutions(model_family: str):
 
 
 def get_allowed_seconds(model_family: str):
-    if model_family == "wy-sd2":
-        return ["auto"]
-    if model_family in ("videos", "LuxVid_video", "videos_stable_fast"):
+    if model_family in ("videos", "wy-sd2", "LuxVid_video", "videos_stable_fast"):
         return [str(value) for value in range(4, 16)]
     if model_family == "grok-imagine-video-1.5-preview":
         return ["6", "10"]
@@ -547,16 +545,36 @@ class WebTaskRunner:
 
         if request_mode == "wy_sd2_videos_async":
             image_urls = [upload_image_to_imgbb(Path(path)) for path in task["image_paths"][:9]]
+            image_count = len(image_urls)
+            if image_count <= 0:
+                mode = "text_to_video"
+            elif image_count == 1:
+                mode = "image_to_video"
+            else:
+                mode = "reference_to_video"
             payload = {
                 "model": task["model_id"],
                 "prompt": task["prompt"],
-                "image_urls": image_urls,
-                "resolution": "720p",
-                "aspect_ratio": task["aspect_ratio"],
-                "duration": "auto",
-                "generate_audio": True,
+                "metadata": {
+                    "mode": mode,
+                    "aspectRatio": task["aspect_ratio"],
+                    "resolution": "720p",
+                    "duration": int(str(task["seconds"])),
+                    "generateAudio": True,
+                },
+                "referenceImages": image_urls,
+                "referenceVideos": [],
+                "referenceAudios": [],
             }
-            headers["Content-Type"] = "application/json"
+            headers["Content-Type"] = "application/json; charset=utf-8"
+            self.log(
+                task["id"],
+                "submit payload => "
+                f"model={payload.get('model')}, "
+                f"mode={mode}, aspectRatio={task['aspect_ratio']}, "
+                f"resolution=720p, duration={task['seconds']}, "
+                f"referenceImages={image_count}"
+            )
             response = self.request_with_retry(
                 "post",
                 f"{task['api_base']}/v1/videos",
@@ -564,7 +582,8 @@ class WebTaskRunner:
                 json=payload,
                 timeout=120,
             )
-            response.raise_for_status()
+            if response.status_code >= 400:
+                raise RuntimeError(f"???? {response.status_code}: {response.text}")
             data = response.json()
             if data.get("error"):
                 error = data.get("error")
