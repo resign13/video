@@ -579,7 +579,13 @@ onUnmounted(() => {
                     {{ formatStatus(task.status) }} · {{ task.aspect_ratio }} / {{ task.resolution }} · {{ task.seconds }}s
                   </div>
                 </div>
-                <span class="dot" :class="taskStatusClass(task.status)"></span>
+                <div class="history-card-actions">
+                  <button class="ghost tiny" :disabled="rerunningTaskId === task.id" @click.stop="rerunTask(task)">
+                    {{ rerunningTaskId === task.id ? '???' : '????' }}
+                  </button>
+                  <button class="ghost tiny" :disabled="!task.download_url" @click.stop="openDownload(task)">??</button>
+                  <span class="dot" :class="taskStatusClass(task.status)"></span>
+                </div>
               </div>
 
               <div v-if="task.image_preview_urls?.length" class="history-images">

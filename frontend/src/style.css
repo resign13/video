@@ -777,3 +777,16 @@ input[type="file"] {
 .history-bottom .tiny {
   white-space: nowrap;
 }
+
+.history-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.history-card-actions .tiny {
+  padding: 5px 9px;
+  white-space: nowrap;
+}
