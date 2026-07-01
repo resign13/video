@@ -844,7 +844,9 @@ class WebTaskRunner:
         while True:
             if request_mode in ("luxvid_videos_async", "zcb_veo_videos_async"):
                 poll_url = f"{task['api_base']}/v1/result/{remote_task_id}"
-            elif request_mode in ("videos_async", "sora_vip3_multi_image", "longxia_videos_async", "grok_imagine_videos_async", "hancat_videos_async", "wy_sd2_videos_async", "xs_sora_videos_async"):
+            elif request_mode == "xs_sora_videos_async":
+                poll_url = f"{task['api_base']}/videos/{remote_task_id}"
+            elif request_mode in ("videos_async", "sora_vip3_multi_image", "longxia_videos_async", "grok_imagine_videos_async", "hancat_videos_async", "wy_sd2_videos_async"):
                 poll_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
             else:
                 poll_url = f"{task['api_base']}/v1/tasks/{remote_task_id}"
@@ -897,8 +899,10 @@ class WebTaskRunner:
                         remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}/content"
                     elif request_mode == "videos_async":
                         remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}/file"
-                    elif request_mode in ("grok_imagine_videos_async", "hancat_videos_async", "wy_sd2_videos_async", "xs_sora_videos_async"):
+                    elif request_mode in ("grok_imagine_videos_async", "hancat_videos_async", "wy_sd2_videos_async"):
                         remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
+                    elif request_mode == "xs_sora_videos_async":
+                        remote_url = f"{task['api_base']}/videos/{remote_task_id}"
                 if not remote_url:
                     raise RuntimeError(f"missing video url: {raw_data}")
                 return remote_url
