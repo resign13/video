@@ -790,3 +790,25 @@ input[type="file"] {
   padding: 5px 9px;
   white-space: nowrap;
 }
+
+.history-item {
+  position: relative;
+  padding-right: 180px;
+}
+
+.history-floating-actions {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 2;
+}
+
+.history-floating-actions .tiny {
+  padding: 5px 10px;
+  white-space: nowrap;
+  background: #252733;
+}
