@@ -812,3 +812,26 @@ input[type="file"] {
   white-space: nowrap;
   background: #252733;
 }
+
+/* Floating actions on the right side of each history task card */
+.history-item {
+  position: relative;
+  padding-right: 190px;
+}
+
+.history-floating-actions {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 5;
+}
+
+.history-floating-actions .tiny {
+  padding: 5px 10px;
+  white-space: nowrap;
+  background: #252733;
+}

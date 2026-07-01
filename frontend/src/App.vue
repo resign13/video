@@ -595,6 +595,9 @@ onUnmounted(() => {
                 <div class="mini-progress">
                   <div class="mini-progress-bar" :style="{ width: `${task.progress || 0}%` }"></div>
                 </div>
+              </div>
+
+              <div class="history-floating-actions">
                 <button class="ghost tiny" :disabled="rerunningTaskId === task.id" @click.stop="rerunTask(task)">
                   {{ rerunningTaskId === task.id ? '提交中' : '重新提交' }}
                 </button>
