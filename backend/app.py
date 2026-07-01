@@ -52,6 +52,7 @@ SEEDANCE2_BASE_URL = env_value("SEEDANCE2_BASE_URL", "https://api.xbyjs.top")
 HANCAT_BASE_URL = env_value("HANCAT_BASE_URL", "https://img-api.xn--1ys141f4ks.com")
 GROK_IMAGINE_BASE_URL = env_value("GROK_IMAGINE_BASE_URL", "https://zexitongxue.com")
 LUXVID_BASE_URL = env_value("LUXVID_BASE_URL", "https://zcbservice.aizfw.cn/kyyReactApiServer")
+WY_SD2_BASE_URL = env_value("WY_SD2_BASE_URL", "https://api.pro666.top")
 IMGBB_UPLOAD_URL = env_value("IMGBB_UPLOAD_URL", "https://api.imgbb.com/1/upload")
 SORA_VIP3_BASE_URL = env_value("SORA_VIP3_BASE_URL", "https://socdabat.it.com")
 SORA_VIP3_1080_BASE_URL = env_value("SORA_VIP3_1080_BASE_URL", "https://zexitongxue.com")
@@ -62,6 +63,7 @@ SEEDANCE2_API_KEY = env_value("SEEDANCE2_API_KEY")
 HANCAT_API_KEY = env_value("HANCAT_API_KEY")
 GROK_IMAGINE_API_KEY = env_value("GROK_IMAGINE_API_KEY")
 LUXVID_API_KEY = env_value("LUXVID_API_KEY")
+WY_SD2_API_KEY = env_value("WY_SD2_API_KEY", "sk-1Yo8xvcztSH4ahlMjLIZnURoZCWo40Ur7T68XZ1fB9UU0n9h")
 VEO_STABLE_API_KEY = env_value("VEO_STABLE_API_KEY", LUXVID_API_KEY)
 IMGBB_API_KEY = env_value("IMGBB_API_KEY")
 SORA_VIP3_API_KEY = env_value("SORA_VIP3_API_KEY")
@@ -131,6 +133,7 @@ MODEL_MATRIX = {
 
 MODEL_OPTIONS = [
     {"label": "videos", "value": "videos"},
+    {"label": "wy-sd2", "value": "wy-sd2"},
     {"label": "seedance2", "value": "LuxVid_video"},
     {"label": "seedance2 fast", "value": "videos_stable_fast"},
     {"label": "grok-imagine-video-1.5-preview", "value": "grok-imagine-video-1.5-preview"},
@@ -237,6 +240,8 @@ def normalize_video_url(url: str, api_base: str):
 def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
     if model_family == "videos":
         return "videos"
+    if model_family == "wy-sd2":
+        return "wy-sd2"
     if model_family == "LuxVid_video":
         return "videos_stable"
     if model_family == "videos_stable_fast":
@@ -285,6 +290,13 @@ def get_backend_config(model_family: str):
             "api_key": LUXVID_API_KEY,
             "auth_mode": "bearer",
             "request_mode": "luxvid_videos_async",
+        }
+    if model_family == "wy-sd2":
+        return {
+            "api_base": WY_SD2_BASE_URL,
+            "api_key": WY_SD2_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "wy_sd2_videos_async",
         }
     if model_family == "grok-imagine-video-1.5-preview":
         return {
@@ -355,7 +367,7 @@ def build_request_prompt(model_family: str, prompt: str, aspect_ratio: str):
 def get_max_images_for_model(model_family: str):
     if model_family == "grok-imagine-video-1.5-preview":
         return 7
-    if model_family == "videos":
+    if model_family in ("videos", "wy-sd2"):
         return 9
     if model_family in ("LuxVid_video", "videos_stable_fast"):
         return 4
@@ -365,6 +377,8 @@ def get_max_images_for_model(model_family: str):
 
 
 def get_allowed_resolutions(model_family: str):
+    if model_family == "wy-sd2":
+        return ["720p"]
     if model_family in ("veo3.1-components", "veo3.1-fast-components"):
         return ["1080p"]
     if model_family == "veo_3_1_pro_stable":
@@ -375,6 +389,8 @@ def get_allowed_resolutions(model_family: str):
 
 
 def get_allowed_seconds(model_family: str):
+    if model_family == "wy-sd2":
+        return ["auto"]
     if model_family in ("videos", "LuxVid_video", "videos_stable_fast"):
         return [str(value) for value in range(4, 16)]
     if model_family == "grok-imagine-video-1.5-preview":
@@ -527,6 +543,34 @@ class WebTaskRunner:
             data = response.json()
             if data.get("error"):
                 raise RuntimeError(str(data.get("error")))
+            return data.get("task_id") or data.get("id") or data.get("taskId")
+
+        if request_mode == "wy_sd2_videos_async":
+            image_urls = [upload_image_to_imgbb(Path(path)) for path in task["image_paths"][:9]]
+            payload = {
+                "model": task["model_id"],
+                "prompt": task["prompt"],
+                "image_urls": image_urls,
+                "resolution": "720p",
+                "aspect_ratio": task["aspect_ratio"],
+                "duration": "auto",
+                "generate_audio": True,
+            }
+            headers["Content-Type"] = "application/json"
+            response = self.request_with_retry(
+                "post",
+                f"{task['api_base']}/v1/videos",
+                headers=headers,
+                json=payload,
+                timeout=120,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if data.get("error"):
+                error = data.get("error")
+                if isinstance(error, dict):
+                    error = error.get("message") or str(error)
+                raise RuntimeError(error)
             return data.get("task_id") or data.get("id") or data.get("taskId")
 
         if request_mode == "grok_imagine_videos_async":
@@ -713,7 +757,7 @@ class WebTaskRunner:
         while True:
             if request_mode in ("luxvid_videos_async", "zcb_veo_videos_async"):
                 poll_url = f"{task['api_base']}/v1/result/{remote_task_id}"
-            elif request_mode in ("videos_async", "sora_vip3_multi_image", "longxia_videos_async", "grok_imagine_videos_async", "hancat_videos_async"):
+            elif request_mode in ("videos_async", "sora_vip3_multi_image", "longxia_videos_async", "grok_imagine_videos_async", "hancat_videos_async", "wy_sd2_videos_async"):
                 poll_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
             else:
                 poll_url = f"{task['api_base']}/v1/tasks/{remote_task_id}"
@@ -766,7 +810,7 @@ class WebTaskRunner:
                         remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}/content"
                     elif request_mode == "videos_async":
                         remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}/file"
-                    elif request_mode in ("grok_imagine_videos_async", "hancat_videos_async"):
+                    elif request_mode in ("grok_imagine_videos_async", "hancat_videos_async", "wy_sd2_videos_async"):
                         remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
                 if not remote_url:
                     raise RuntimeError(f"missing video url: {raw_data}")
@@ -885,7 +929,7 @@ def models():
                 "max_images": get_max_images_for_model(model_family),
                 "resolutions": get_allowed_resolutions(model_family),
                 "seconds_options": get_allowed_seconds(model_family),
-                "aspect_ratios": ["16:9", "9:16", "1:1"] if model_family in ("LuxVid_video", "videos_stable_fast") else (["16:9", "9:16"] if model_family in VEO_STABLE_MODELS else ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]),
+                "aspect_ratios": ["16:9", "9:16", "1:1"] if model_family in ("LuxVid_video", "videos_stable_fast") else (["16:9", "9:16", "1:1"] if model_family == "wy-sd2" else (["16:9", "9:16"] if model_family in VEO_STABLE_MODELS else ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"])),
                 "needs_api_key": item.get("needs_api_key", False),
             }
         )
@@ -1051,6 +1095,7 @@ def create_task():
         if model_family in PROMPT_RATIO_MODELS
         or model_family in (
             "videos",
+            "wy-sd2",
             "LuxVid_video",
             "videos_stable_fast",
             "grok-imagine-video-1.5-preview",
