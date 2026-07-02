@@ -54,6 +54,7 @@ GROK_IMAGINE_BASE_URL = env_value("GROK_IMAGINE_BASE_URL", "https://zexitongxue.
 LUXVID_BASE_URL = env_value("LUXVID_BASE_URL", "https://zcbservice.aizfw.cn/kyyReactApiServer")
 WY_SD2_BASE_URL = env_value("WY_SD2_BASE_URL", "https://api.pro666.top")
 XS_SORA_BASE_URL = env_value("XS_SORA_BASE_URL", "https://api.xs-token.com/v1")
+YCY_BASE_URL = env_value("YCY_BASE_URL", "https://ycyapi.cn")
 IMGBB_UPLOAD_URL = env_value("IMGBB_UPLOAD_URL", "https://api.imgbb.com/1/upload")
 SORA_VIP3_BASE_URL = env_value("SORA_VIP3_BASE_URL", "https://socdabat.it.com")
 SORA_VIP3_1080_BASE_URL = env_value("SORA_VIP3_1080_BASE_URL", "https://zexitongxue.com")
@@ -66,6 +67,7 @@ GROK_IMAGINE_API_KEY = env_value("GROK_IMAGINE_API_KEY")
 LUXVID_API_KEY = env_value("LUXVID_API_KEY")
 WY_SD2_API_KEY = env_value("WY_SD2_API_KEY", "sk-1Yo8xvcztSH4ahlMjLIZnURoZCWo40Ur7T68XZ1fB9UU0n9h")
 XS_SORA_API_KEY = env_value("XS_SORA_API_KEY", "sk-xs-f462a66007a2d9597e79b627b6fb9529b6fadaf24e80933e")
+YCY_API_KEY = env_value("YCY_API_KEY", "sk-c2zWmrl9MOBfUFw8RLb0iOXClbce94ejxp851TAYytibMXiy")
 VEO_STABLE_API_KEY = env_value("VEO_STABLE_API_KEY", LUXVID_API_KEY)
 IMGBB_API_KEY = env_value("IMGBB_API_KEY")
 SORA_VIP3_API_KEY = env_value("SORA_VIP3_API_KEY")
@@ -138,6 +140,7 @@ MODEL_OPTIONS = [
     {"label": "wy-sd2", "value": "wy-sd2"},
     {"label": "sora-v4-fast", "value": "sora-v4-fast"},
     {"label": "sora-v3-pro", "value": "sora-v3-pro"},
+    {"label": "video-v1-15s", "value": "video-v1-15s"},
     {"label": "seedance2", "value": "LuxVid_video"},
     {"label": "seedance2 fast", "value": "videos_stable_fast"},
     {"label": "grok-imagine-video-1.5-preview", "value": "grok-imagine-video-1.5-preview"},
@@ -250,6 +253,8 @@ def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
         return "sora-v4-fast"
     if model_family == "sora-v3-pro":
         return "sora-v3-pro"
+    if model_family == "video-v1-15s":
+        return "video-v1-15s"
     if model_family == "LuxVid_video":
         return "videos_stable"
     if model_family == "videos_stable_fast":
@@ -312,6 +317,13 @@ def get_backend_config(model_family: str):
             "api_key": XS_SORA_API_KEY,
             "auth_mode": "bearer",
             "request_mode": "xs_sora_videos_async",
+        }
+    if model_family == "video-v1-15s":
+        return {
+            "api_base": YCY_BASE_URL,
+            "api_key": YCY_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "ycy_video_generations_async",
         }
     if model_family == "grok-imagine-video-1.5-preview":
         return {
@@ -380,6 +392,8 @@ def build_request_prompt(model_family: str, prompt: str, aspect_ratio: str):
 
 
 def get_max_images_for_model(model_family: str):
+    if model_family == "video-v1-15s":
+        return 0
     if model_family == "grok-imagine-video-1.5-preview":
         return 7
     if model_family in ("sora-v4-fast", "sora-v3-pro"):
@@ -394,6 +408,8 @@ def get_max_images_for_model(model_family: str):
 
 
 def get_allowed_resolutions(model_family: str):
+    if model_family == "video-v1-15s":
+        return ["1080p"]
     if model_family == "sora-v3-pro":
         return ["720p"]
     if model_family == "sora-v4-fast":
@@ -410,6 +426,8 @@ def get_allowed_resolutions(model_family: str):
 
 
 def get_allowed_seconds(model_family: str):
+    if model_family == "video-v1-15s":
+        return ["15"]
     if model_family in ("sora-v4-fast", "sora-v3-pro"):
         return [str(value) for value in range(5, 16)]
     if model_family in ("videos", "wy-sd2", "LuxVid_video", "videos_stable_fast"):
@@ -598,6 +616,35 @@ class WebTaskRunner:
             )
             if response.status_code >= 400:
                 raise RuntimeError(f"???? {response.status_code}: {response.text}")
+            data = response.json()
+            if data.get("error"):
+                error = data.get("error")
+                if isinstance(error, dict):
+                    error = error.get("message") or str(error)
+                raise RuntimeError(error)
+            return data.get("task_id") or data.get("id") or data.get("taskId")
+
+        if request_mode == "ycy_video_generations_async":
+            payload = {
+                "model": task["model_id"],
+                "prompt": task["prompt"],
+                "ratio": task["aspect_ratio"],
+            }
+            headers["Content-Type"] = "application/json"
+            self.log(
+                task["id"],
+                "submit payload => "
+                f"model={payload.get('model')}, ratio={payload.get('ratio')}, seconds=15"
+            )
+            response = self.request_with_retry(
+                "post",
+                f"{task['api_base']}/v1/video/generations",
+                headers=headers,
+                json=payload,
+                timeout=120,
+            )
+            if response.status_code >= 400:
+                raise RuntimeError(f"YCY submit failed {response.status_code}: {response.text}")
             data = response.json()
             if data.get("error"):
                 error = data.get("error")
@@ -841,6 +888,8 @@ class WebTaskRunner:
                 poll_url = f"{task['api_base']}/v1/result/{remote_task_id}"
             elif request_mode == "xs_sora_videos_async":
                 poll_url = f"{task['api_base']}/videos/{remote_task_id}"
+            elif request_mode == "ycy_video_generations_async":
+                poll_url = f"{task['api_base']}/v1/video/generations/{remote_task_id}"
             elif request_mode in ("videos_async", "sora_vip3_multi_image", "longxia_videos_async", "grok_imagine_videos_async", "hancat_videos_async", "wy_sd2_videos_async"):
                 poll_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
             else:
@@ -890,7 +939,9 @@ class WebTaskRunner:
                 if not remote_url:
                     remote_url = normalize_video_url(extract_video_url_recursive(raw_data), task["api_base"])
                 if not remote_url:
-                    if request_mode == "sora_vip3_multi_image":
+                    if request_mode == "ycy_video_generations_async":
+                        remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}/content"
+                    elif request_mode == "sora_vip3_multi_image":
                         remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}/content"
                     elif request_mode == "videos_async":
                         remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}/file"
@@ -1015,7 +1066,7 @@ def models():
                 "max_images": get_max_images_for_model(model_family),
                 "resolutions": get_allowed_resolutions(model_family),
                 "seconds_options": get_allowed_seconds(model_family),
-                "aspect_ratios": ["16:9", "9:16", "1:1"] if model_family in ("LuxVid_video", "videos_stable_fast") else (["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"] if model_family in ("sora-v4-fast", "sora-v3-pro") else (["16:9", "9:16", "1:1"] if model_family == "wy-sd2" else (["16:9", "9:16"] if model_family in VEO_STABLE_MODELS else ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]))),
+                "aspect_ratios": ["16:9", "9:16", "1:1"] if model_family in ("LuxVid_video", "videos_stable_fast", "wy-sd2", "video-v1-15s") else (["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"] if model_family in ("sora-v4-fast", "sora-v3-pro") else (["16:9", "9:16"] if model_family in VEO_STABLE_MODELS else ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"])),
                 "needs_api_key": item.get("needs_api_key", False),
             }
         )
@@ -1153,8 +1204,10 @@ def create_task():
         return jsonify({"error": "missing prompt"}), 400
 
     max_images = get_max_images_for_model(model_family)
-    if not files:
+    if max_images > 0 and not files:
         return jsonify({"error": "at least one reference image is required"}), 400
+    if max_images == 0 and files:
+        return jsonify({"error": "this model does not accept reference images"}), 400
     if len(files) > max_images:
         return jsonify({"error": f"model allows at most {max_images} images"}), 400
 
@@ -1184,6 +1237,7 @@ def create_task():
             "wy-sd2",
             "sora-v4-fast",
             "sora-v3-pro",
+            "video-v1-15s",
             "LuxVid_video",
             "videos_stable_fast",
             "grok-imagine-video-1.5-preview",

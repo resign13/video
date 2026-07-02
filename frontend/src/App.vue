@@ -289,7 +289,7 @@ async function submitTask() {
     errorText.value = '请输入提示词'
     return
   }
-  if (!form.images.length) {
+  if (maxImages.value > 0 && !form.images.length) {
     errorText.value = '请至少上传 1 张参考图'
     return
   }
@@ -459,6 +459,7 @@ onUnmounted(() => {
           </div>
 
           <div
+            v-if="maxImages > 0"
             class="image-grid"
             @dragenter.prevent.stop
             @dragover.prevent.stop
@@ -495,7 +496,7 @@ onUnmounted(() => {
             :multiple="activeImageSlot === null"
             @change="onFilesChange"
           />
-          <button class="ghost upload-btn" @click="openImagePicker()">追加参考图</button>
+          <button v-if="maxImages > 0" class="ghost upload-btn" @click="openImagePicker()">追加参考图</button>
 
           <textarea
             v-model="form.prompt"
