@@ -51,6 +51,7 @@ BASE_URL = env_value("BASE_URL", "https://api.dealonhorizon.us")
 SEEDANCE2_BASE_URL = env_value("SEEDANCE2_BASE_URL", "https://api.xbyjs.top")
 HANCAT_BASE_URL = env_value("HANCAT_BASE_URL", "https://img-api.xn--1ys141f4ks.com")
 GROK_IMAGINE_BASE_URL = env_value("GROK_IMAGINE_BASE_URL", "https://zexitongxue.com")
+DOLO_BASE_URL = env_value("DOLO_BASE_URL", "https://zexitongxue.com")
 LUXVID_BASE_URL = env_value("LUXVID_BASE_URL", "https://zcbservice.aizfw.cn/kyyReactApiServer")
 WY_SD2_BASE_URL = env_value("WY_SD2_BASE_URL", "https://api.pro666.top")
 XS_SORA_BASE_URL = env_value("XS_SORA_BASE_URL", "https://api.xs-token.com/v1")
@@ -64,6 +65,7 @@ DEFAULT_API_KEY = env_value("DEFAULT_API_KEY")
 SEEDANCE2_API_KEY = env_value("SEEDANCE2_API_KEY")
 HANCAT_API_KEY = env_value("HANCAT_API_KEY")
 GROK_IMAGINE_API_KEY = env_value("GROK_IMAGINE_API_KEY")
+DOLO_API_KEY = env_value("DOLO_API_KEY", "sk-wWf6F6bcdk1Hs1Rd9HKfktf9Em3iJKh5NKxDp1ZEMImHOWZF")
 LUXVID_API_KEY = env_value("LUXVID_API_KEY")
 WY_SD2_API_KEY = env_value("WY_SD2_API_KEY", "sk-1Yo8xvcztSH4ahlMjLIZnURoZCWo40Ur7T68XZ1fB9UU0n9h")
 XS_SORA_API_KEY = env_value("XS_SORA_API_KEY", "sk-xs-f462a66007a2d9597e79b627b6fb9529b6fadaf24e80933e")
@@ -141,6 +143,7 @@ MODEL_OPTIONS = [
     {"label": "sora-v4-fast", "value": "sora-v4-fast"},
     {"label": "sora-v3-pro", "value": "sora-v3-pro"},
     {"label": "video-v1-15s", "value": "video-v1-15s"},
+    {"label": "dolo", "value": "dolo"},
     {"label": "seedance2", "value": "LuxVid_video"},
     {"label": "seedance2 fast", "value": "videos_stable_fast"},
     {"label": "grok-imagine-video-1.5-preview", "value": "grok-imagine-video-1.5-preview"},
@@ -255,6 +258,8 @@ def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
         return "sora-v3-pro"
     if model_family == "video-v1-15s":
         return "video-v1-15s"
+    if model_family == "dolo":
+        return "dolo"
     if model_family == "LuxVid_video":
         return "videos_stable"
     if model_family == "videos_stable_fast":
@@ -325,6 +330,13 @@ def get_backend_config(model_family: str):
             "auth_mode": "bearer",
             "request_mode": "ycy_video_generations_async",
         }
+    if model_family == "dolo":
+        return {
+            "api_base": DOLO_BASE_URL,
+            "api_key": DOLO_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "dolo_videos_async",
+        }
     if model_family == "grok-imagine-video-1.5-preview":
         return {
             "api_base": GROK_IMAGINE_BASE_URL,
@@ -392,6 +404,8 @@ def build_request_prompt(model_family: str, prompt: str, aspect_ratio: str):
 
 
 def get_max_images_for_model(model_family: str):
+    if model_family == "dolo":
+        return 9
     if model_family == "video-v1-15s":
         return 0
     if model_family == "grok-imagine-video-1.5-preview":
@@ -408,6 +422,8 @@ def get_max_images_for_model(model_family: str):
 
 
 def get_allowed_resolutions(model_family: str):
+    if model_family == "dolo":
+        return ["720p"]
     if model_family == "video-v1-15s":
         return ["1080p"]
     if model_family == "sora-v3-pro":
@@ -426,6 +442,8 @@ def get_allowed_resolutions(model_family: str):
 
 
 def get_allowed_seconds(model_family: str):
+    if model_family == "dolo":
+        return ["5", "10", "15"]
     if model_family == "video-v1-15s":
         return ["15"]
     if model_family in ("sora-v4-fast", "sora-v3-pro"):
@@ -645,6 +663,39 @@ class WebTaskRunner:
             )
             if response.status_code >= 400:
                 raise RuntimeError(f"YCY submit failed {response.status_code}: {response.text}")
+            data = response.json()
+            if data.get("error"):
+                error = data.get("error")
+                if isinstance(error, dict):
+                    error = error.get("message") or str(error)
+                raise RuntimeError(error)
+            return data.get("task_id") or data.get("id") or data.get("taskId")
+
+        if request_mode == "dolo_videos_async":
+            image_urls = [upload_image_to_imgbb(Path(path)) for path in task["image_paths"][:9]]
+            payload = {
+                "model": task["model_id"],
+                "prompt": task["prompt"],
+                "duration": int(str(task["seconds"])),
+                "ratio": task["aspect_ratio"],
+                "images": image_urls,
+            }
+            headers["Content-Type"] = "application/json"
+            self.log(
+                task["id"],
+                "submit payload => "
+                f"model={payload.get('model')}, ratio={payload.get('ratio')}, "
+                f"duration={payload.get('duration')}, images={len(image_urls)}"
+            )
+            response = self.request_with_retry(
+                "post",
+                f"{task['api_base']}/v1/videos",
+                headers=headers,
+                json=payload,
+                timeout=120,
+            )
+            if response.status_code >= 400:
+                raise RuntimeError(f"dolo submit failed {response.status_code}: {response.text}")
             data = response.json()
             if data.get("error"):
                 error = data.get("error")
@@ -890,6 +941,8 @@ class WebTaskRunner:
                 poll_url = f"{task['api_base']}/videos/{remote_task_id}"
             elif request_mode == "ycy_video_generations_async":
                 poll_url = f"{task['api_base']}/v1/video/generations/{remote_task_id}"
+            elif request_mode == "dolo_videos_async":
+                poll_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
             elif request_mode in ("videos_async", "sora_vip3_multi_image", "longxia_videos_async", "grok_imagine_videos_async", "hancat_videos_async", "wy_sd2_videos_async"):
                 poll_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
             else:
@@ -945,6 +998,8 @@ class WebTaskRunner:
                         remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}/content"
                     elif request_mode == "videos_async":
                         remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}/file"
+                    elif request_mode == "dolo_videos_async":
+                        remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}/content"
                     elif request_mode in ("grok_imagine_videos_async", "hancat_videos_async", "wy_sd2_videos_async"):
                         remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
                     elif request_mode == "xs_sora_videos_async":
@@ -1066,7 +1121,7 @@ def models():
                 "max_images": get_max_images_for_model(model_family),
                 "resolutions": get_allowed_resolutions(model_family),
                 "seconds_options": get_allowed_seconds(model_family),
-                "aspect_ratios": ["16:9", "9:16", "1:1"] if model_family in ("LuxVid_video", "videos_stable_fast", "wy-sd2", "video-v1-15s") else (["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"] if model_family in ("sora-v4-fast", "sora-v3-pro") else (["16:9", "9:16"] if model_family in VEO_STABLE_MODELS else ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"])),
+                "aspect_ratios": ["16:9", "9:16", "1:1"] if model_family in ("LuxVid_video", "videos_stable_fast", "wy-sd2", "video-v1-15s", "dolo") else (["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"] if model_family in ("sora-v4-fast", "sora-v3-pro") else (["16:9", "9:16"] if model_family in VEO_STABLE_MODELS else ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"])),
                 "needs_api_key": item.get("needs_api_key", False),
             }
         )
@@ -1238,6 +1293,7 @@ def create_task():
             "sora-v4-fast",
             "sora-v3-pro",
             "video-v1-15s",
+            "dolo",
             "LuxVid_video",
             "videos_stable_fast",
             "grok-imagine-video-1.5-preview",
