@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 
 const backendBase = ''
 const models = ref([])
@@ -13,6 +13,7 @@ const taskPollTimer = ref(null)
 const workMode = ref('standard')
 const batchCount = ref(3)
 const rerunningTaskId = ref('')
+const reusingTaskId = ref('')
 const previewUrlCache = new WeakMap()
 
 const form = reactive({
@@ -367,6 +368,58 @@ function previewFileUrl(file) {
   return previewUrlCache.get(file)
 }
 
+function fileExtensionFromBlob(blob) {
+  const mime = blob?.type || ''
+  if (mime.includes('png')) return 'png'
+  if (mime.includes('webp')) return 'webp'
+  if (mime.includes('bmp')) return 'bmp'
+  return 'jpg'
+}
+
+async function imageUrlToFile(url, index) {
+  const res = await fetch(url)
+  if (!res.ok) {
+    throw new Error(`\u53c2\u8003\u56fe ${index + 1} \u8bfb\u53d6\u5931\u8d25`)
+  }
+  const blob = await res.blob()
+  const ext = fileExtensionFromBlob(blob)
+  return new File([blob], `reuse_ref_${index + 1}.${ext}`, { type: blob.type || 'image/jpeg' })
+}
+
+async function reuseTaskConfig(task) {
+  if (!task?.id || reusingTaskId.value) return
+  reusingTaskId.value = task.id
+  errorText.value = ''
+  try {
+    const model = models.value.find(item => item.value === task.model_family)
+    if (!model) {
+      throw new Error('\u5f53\u524d\u4efb\u52a1\u6a21\u578b\u5df2\u4e0d\u5728\u4e0b\u62c9\u5217\u8868\u4e2d')
+    }
+
+    form.model_family = task.model_family
+    await nextTick()
+    form.aspect_ratio = model.aspect_ratios.includes(task.aspect_ratio) ? task.aspect_ratio : model.aspect_ratios[0]
+    form.resolution = model.resolutions.includes(task.resolution) ? task.resolution : model.resolutions[0]
+    const taskSeconds = String(task.seconds || '')
+    form.seconds = model.seconds_options.includes(taskSeconds) ? taskSeconds : model.seconds_options[0]
+    form.prompt = task.prompt || ''
+    form.auto_face = Boolean(task.auto_face) && task.model_family === 'videos'
+
+    const imageUrls = (task.image_preview_urls || []).slice(0, model.max_images || 0)
+    form.images = imageUrls.length
+      ? await Promise.all(imageUrls.map((url, index) => imageUrlToFile(url, index)))
+      : []
+
+    workMode.value = 'standard'
+    selectedTaskId.value = task.id
+    errorText.value = '\u5df2\u590d\u7528\u5230\u5de6\u4fa7\uff0c\u53ef\u76f4\u63a5\u4fee\u6539\u540e\u751f\u6210'
+  } catch (error) {
+    errorText.value = error.message || '\u590d\u7528\u4efb\u52a1\u5931\u8d25'
+  } finally {
+    reusingTaskId.value = ''
+  }
+}
+
 onMounted(async () => {
   await loadModels()
   await loadTasks()
@@ -599,10 +652,13 @@ onUnmounted(() => {
               </div>
 
               <div class="history-floating-actions">
-                <button class="ghost tiny" :disabled="rerunningTaskId === task.id" @click.stop="rerunTask(task)">
-                  {{ rerunningTaskId === task.id ? '提交中' : '重新提交' }}
+                <button class="ghost tiny" :disabled="reusingTaskId === task.id" @click.stop="reuseTaskConfig(task)">
+                  {{ reusingTaskId === task.id ? '\u590d\u7528\u4e2d' : '\u590d\u7528\u63d0\u793a\u8bcd' }}
                 </button>
-                <button class="ghost tiny" :disabled="!task.download_url" @click.stop="openDownload(task)">下载</button>
+                <button class="ghost tiny" :disabled="rerunningTaskId === task.id" @click.stop="rerunTask(task)">
+                  {{ rerunningTaskId === task.id ? '\u63d0\u4ea4\u4e2d' : '\u91cd\u65b0\u63d0\u4ea4' }}
+                </button>
+                <button class="ghost tiny" :disabled="!task.download_url" @click.stop="openDownload(task)">&#x4e0b;&#x8f7d;</button>
               </div>
             </div>
           </div>

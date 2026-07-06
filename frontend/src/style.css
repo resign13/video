@@ -835,3 +835,15 @@ input[type="file"] {
   white-space: nowrap;
   background: #252733;
 }
+
+
+/* Room for three floating action buttons: reuse / rerun / download */
+.history-item {
+  padding-right: 285px;
+}
+
+.history-floating-actions {
+  max-width: 265px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
