@@ -60,6 +60,8 @@ IMGBB_UPLOAD_URL = env_value("IMGBB_UPLOAD_URL", "https://api.imgbb.com/1/upload
 SORA_VIP3_BASE_URL = env_value("SORA_VIP3_BASE_URL", "https://socdabat.it.com")
 SORA_VIP3_1080_BASE_URL = env_value("SORA_VIP3_1080_BASE_URL", "https://zexitongxue.com")
 LONGXIA_BASE_URL = env_value("LONGXIA_BASE_URL", "https://api.longxiaai.store")
+SUDASHUI_BASE_URL = env_value("SUDASHUI_BASE_URL", "https://api.sudashuiapi.com")
+SUDASHUI_UPLOAD_URL = env_value("SUDASHUI_UPLOAD_URL", "https://files.sudashuiapi.com")
 
 DEFAULT_API_KEY = env_value("DEFAULT_API_KEY")
 SEEDANCE2_API_KEY = env_value("SEEDANCE2_API_KEY")
@@ -75,6 +77,7 @@ IMGBB_API_KEY = env_value("IMGBB_API_KEY")
 SORA_VIP3_API_KEY = env_value("SORA_VIP3_API_KEY")
 SORA_VIP3_1080_API_KEY = env_value("SORA_VIP3_1080_API_KEY")
 LONGXIA_API_KEY = env_value("LONGXIA_API_KEY")
+SUDASHUI_API_KEY = env_value("SUDASHUI_API_KEY", "sk-IHScGlbGWzhRbsBQ5d7fz3R2v0bPfvPpf4erDbMJUpViPvKF")
 
 POLL_INTERVAL_SECONDS = 5
 LONGXIA_POLL_INTERVAL_SECONDS = 120
@@ -144,6 +147,8 @@ MODEL_OPTIONS = [
     {"label": "sora-v3-pro", "value": "sora-v3-pro"},
     {"label": "video-v1-15s", "value": "video-v1-15s"},
     {"label": "dolo", "value": "dolo"},
+    {"label": "xh-sdas-fast-720p", "value": "xh-sdas-fast-720p"},
+    {"label": "xh-sdas-pro-720p", "value": "xh-sdas-pro-720p"},
     {"label": "seedance2", "value": "LuxVid_video"},
     {"label": "seedance2 fast", "value": "videos_stable_fast"},
     {"label": "grok-imagine-video-1.5-preview", "value": "grok-imagine-video-1.5-preview"},
@@ -215,6 +220,31 @@ def upload_image_to_imgbb(file_path: Path, api_key=IMGBB_API_KEY, timeout=120):
     return url
 
 
+def guess_mime_type(file_path: Path):
+    suffix = file_path.suffix.lower()
+    return {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".bmp": "image/bmp",
+    }.get(suffix, "application/octet-stream")
+
+
+def upload_file_to_sudashui(file_path: Path, api_key: str, timeout=120):
+    headers = {"Authorization": f"Bearer {api_key}"}
+    with open(file_path, "rb") as handle:
+        files = {"file": (file_path.name, handle, guess_mime_type(file_path))}
+        response = requests.post(SUDASHUI_UPLOAD_URL, headers=headers, files=files, timeout=timeout)
+    if response.status_code >= 400:
+        raise RuntimeError(f"sudashui upload failed {response.status_code}: {response.text}")
+    payload = response.json()
+    url = payload.get("url") or (payload.get("data") or {}).get("url")
+    if not url:
+        raise RuntimeError(f"sudashui upload missing url: {payload}")
+    return url
+
+
 def extract_video_url_recursive(payload):
     if isinstance(payload, str):
         return payload if payload.startswith(("http://", "https://", "/")) else ""
@@ -260,6 +290,8 @@ def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
         return "video-v1-15s"
     if model_family == "dolo":
         return "dolo"
+    if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p"):
+        return model_family
     if model_family == "LuxVid_video":
         return "videos_stable"
     if model_family == "videos_stable_fast":
@@ -337,6 +369,13 @@ def get_backend_config(model_family: str):
             "auth_mode": "bearer",
             "request_mode": "dolo_videos_async",
         }
+    if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p"):
+        return {
+            "api_base": SUDASHUI_BASE_URL,
+            "api_key": SUDASHUI_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "sudashui_videos_async",
+        }
     if model_family == "grok-imagine-video-1.5-preview":
         return {
             "api_base": GROK_IMAGINE_BASE_URL,
@@ -404,6 +443,8 @@ def build_request_prompt(model_family: str, prompt: str, aspect_ratio: str):
 
 
 def get_max_images_for_model(model_family: str):
+    if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p"):
+        return 4
     if model_family == "dolo":
         return 9
     if model_family == "video-v1-15s":
@@ -422,6 +463,8 @@ def get_max_images_for_model(model_family: str):
 
 
 def get_allowed_resolutions(model_family: str):
+    if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p"):
+        return ["720p"]
     if model_family == "dolo":
         return ["720p"]
     if model_family == "video-v1-15s":
@@ -442,6 +485,8 @@ def get_allowed_resolutions(model_family: str):
 
 
 def get_allowed_seconds(model_family: str):
+    if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p"):
+        return ["10", "15"]
     if model_family == "dolo":
         return ["5", "10", "15"]
     if model_family == "video-v1-15s":
@@ -704,6 +749,50 @@ class WebTaskRunner:
                 raise RuntimeError(error)
             return data.get("task_id") or data.get("id") or data.get("taskId")
 
+        if request_mode == "sudashui_videos_async":
+            import json
+            image_urls = [upload_file_to_sudashui(Path(path), task["api_key"]) for path in task["image_paths"][:4]]
+            payload_data = {
+                "aspectRatio": task["aspect_ratio"],
+                "mode": "references",
+            }
+            if image_urls:
+                payload_data["imageUrls"] = image_urls
+            payload = {
+                "model": task["model_id"],
+                "prompt": task["prompt"],
+                "duration": int(str(task["seconds"])),
+                "metadata": {
+                    "payload": json.dumps(payload_data, ensure_ascii=False, separators=(",", ":")),
+                },
+            }
+            headers["Content-Type"] = "application/json"
+            self.log(
+                task["id"],
+                "submit payload => "
+                f"model={payload.get('model')}, duration={payload.get('duration')}, "
+                f"aspectRatio={task['aspect_ratio']}, imageUrls={len(image_urls)}"
+            )
+            response = self.request_with_retry(
+                "post",
+                f"{task['api_base']}/v1/video/generations",
+                headers=headers,
+                json=payload,
+                timeout=120,
+            )
+            if response.status_code >= 400:
+                raise RuntimeError(f"sudashui submit failed {response.status_code}: {response.text}")
+            data = response.json()
+            if data.get("code") and str(data.get("code")).lower() not in ("success", "ok"):
+                raise RuntimeError(data.get("message") or str(data))
+            if data.get("error"):
+                error = data.get("error")
+                if isinstance(error, dict):
+                    error = error.get("message") or str(error)
+                raise RuntimeError(error)
+            result = data.get("data") or data
+            return result.get("task_id") or result.get("id") or data.get("task_id") or data.get("id") or data.get("taskId")
+
         if request_mode == "wy_sd2_videos_async":
             image_urls = [upload_image_to_imgbb(Path(path)) for path in task["image_paths"][:9]]
             image_count = len(image_urls)
@@ -943,6 +1032,8 @@ class WebTaskRunner:
                 poll_url = f"{task['api_base']}/v1/video/generations/{remote_task_id}"
             elif request_mode == "dolo_videos_async":
                 poll_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
+            elif request_mode == "sudashui_videos_async":
+                poll_url = f"{task['api_base']}/v1/video/generations/{remote_task_id}"
             elif request_mode in ("videos_async", "sora_vip3_multi_image", "longxia_videos_async", "grok_imagine_videos_async", "hancat_videos_async", "wy_sd2_videos_async"):
                 poll_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
             else:
@@ -960,7 +1051,7 @@ class WebTaskRunner:
             raw_data = response.json()
             if request_mode in ("luxvid_videos_async", "zcb_veo_videos_async"):
                 data = raw_data.get("data", raw_data) if isinstance(raw_data, dict) else {}
-            elif request_mode == "longxia_videos_async":
+            elif request_mode in ("longxia_videos_async", "sudashui_videos_async"):
                 data = raw_data.get("data", raw_data)
             else:
                 data = raw_data
@@ -1000,6 +1091,8 @@ class WebTaskRunner:
                         remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}/file"
                     elif request_mode == "dolo_videos_async":
                         remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}/content"
+                    elif request_mode == "sudashui_videos_async":
+                        remote_url = data.get("result_url") or extract_video_url_recursive(data)
                     elif request_mode in ("grok_imagine_videos_async", "hancat_videos_async", "wy_sd2_videos_async"):
                         remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
                     elif request_mode == "xs_sora_videos_async":
@@ -1121,7 +1214,7 @@ def models():
                 "max_images": get_max_images_for_model(model_family),
                 "resolutions": get_allowed_resolutions(model_family),
                 "seconds_options": get_allowed_seconds(model_family),
-                "aspect_ratios": ["16:9", "9:16", "1:1"] if model_family in ("LuxVid_video", "videos_stable_fast", "wy-sd2", "video-v1-15s", "dolo") else (["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"] if model_family in ("sora-v4-fast", "sora-v3-pro") else (["16:9", "9:16"] if model_family in VEO_STABLE_MODELS else ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"])),
+                "aspect_ratios": ["16:9", "9:16", "1:1"] if model_family in ("LuxVid_video", "videos_stable_fast", "wy-sd2", "video-v1-15s", "dolo", "xh-sdas-fast-720p", "xh-sdas-pro-720p") else (["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"] if model_family in ("sora-v4-fast", "sora-v3-pro") else (["16:9", "9:16"] if model_family in VEO_STABLE_MODELS else ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"])),
                 "needs_api_key": item.get("needs_api_key", False),
             }
         )
@@ -1294,6 +1387,8 @@ def create_task():
             "sora-v3-pro",
             "video-v1-15s",
             "dolo",
+            "xh-sdas-fast-720p",
+            "xh-sdas-pro-720p",
             "LuxVid_video",
             "videos_stable_fast",
             "grok-imagine-video-1.5-preview",
