@@ -231,11 +231,32 @@ def guess_mime_type(file_path: Path):
     }.get(suffix, "application/octet-stream")
 
 
+def build_sudashui_upload_file(file_path: Path):
+    allowed_image_suffixes = {".jpg", ".jpeg", ".png", ".webp"}
+    suffix = file_path.suffix.lower()
+    if suffix in allowed_image_suffixes:
+        return file_path.name, open(file_path, "rb"), guess_mime_type(file_path), True
+
+    image = Image.open(file_path)
+    if image.mode not in ("RGB", "L"):
+        image = image.convert("RGB")
+    elif image.mode == "L":
+        image = image.convert("RGB")
+    buffer = BytesIO()
+    image.save(buffer, format="JPEG", quality=92, optimize=True)
+    buffer.seek(0)
+    filename = f"{file_path.stem or 'image'}.jpg"
+    return filename, buffer, "image/jpeg", False
+
+
 def upload_file_to_sudashui(file_path: Path, api_key: str, timeout=120):
     headers = {"Authorization": f"Bearer {api_key}"}
-    with open(file_path, "rb") as handle:
-        files = {"file": (file_path.name, handle, guess_mime_type(file_path))}
+    filename, handle, mime_type, _ = build_sudashui_upload_file(file_path)
+    try:
+        files = {"file": (filename, handle, mime_type)}
         response = requests.post(SUDASHUI_UPLOAD_URL, headers=headers, files=files, timeout=timeout)
+    finally:
+        handle.close()
     if response.status_code >= 400:
         raise RuntimeError(f"sudashui upload failed {response.status_code}: {response.text}")
     payload = response.json()
