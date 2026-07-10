@@ -90,7 +90,7 @@ CLEANUP_INTERVAL_SECONDS = 10 * 60
 SECONDS_OPTIONS = ["5", "10", "15"]
 
 PROMPT_RATIO_MODELS = {"seedance2", "jimeng-video-3.5-pro-12s", "sora-2-12s"}
-LOW_RES_ONLY_MODELS = {"videos", "LuxVid_video", "videos_stable_fast", "grok-imagine-video-1.5-preview"}
+LOW_RES_ONLY_MODELS = {"videos", "videos_pro", "LuxVid_video", "videos_stable_fast", "grok-imagine-video-1.5-preview"}
 VEO_STABLE_MODELS = {"veo_3_1_pro_stable", "veo_3_1_fast", "veo_3_1_pro"}
 
 MODEL_MATRIX = {
@@ -142,6 +142,7 @@ MODEL_MATRIX = {
 
 MODEL_OPTIONS = [
     {"label": "videos", "value": "videos"},
+    {"label": "videos_pro", "value": "videos_pro"},
     {"label": "wy-sd2", "value": "wy-sd2"},
     {"label": "sora-v4-fast", "value": "sora-v4-fast"},
     {"label": "sora-v3-pro", "value": "sora-v3-pro"},
@@ -299,8 +300,8 @@ def normalize_video_url(url: str, api_base: str):
 
 
 def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
-    if model_family == "videos":
-        return "videos"
+    if model_family in ("videos", "videos_pro"):
+        return model_family
     if model_family == "wy-sd2":
         return "seedance2.0-fast"
     if model_family == "sora-v4-fast":
@@ -355,7 +356,7 @@ def build_size_value(aspect_ratio: str, resolution: str):
 
 
 def get_backend_config(model_family: str):
-    if model_family in ("videos", "LuxVid_video", "videos_stable_fast"):
+    if model_family in ("videos", "videos_pro", "LuxVid_video", "videos_stable_fast"):
         return {
             "api_base": LUXVID_BASE_URL,
             "api_key": LUXVID_API_KEY,
@@ -474,7 +475,7 @@ def get_max_images_for_model(model_family: str):
         return 7
     if model_family in ("sora-v4-fast", "sora-v3-pro"):
         return 4
-    if model_family in ("videos", "wy-sd2"):
+    if model_family in ("videos", "videos_pro", "wy-sd2"):
         return 9
     if model_family in ("LuxVid_video", "videos_stable_fast"):
         return 4
@@ -514,6 +515,8 @@ def get_allowed_seconds(model_family: str):
         return ["15"]
     if model_family in ("sora-v4-fast", "sora-v3-pro"):
         return [str(value) for value in range(5, 16)]
+    if model_family == "videos_pro":
+        return ["10", "15"]
     if model_family in ("videos", "wy-sd2", "LuxVid_video", "videos_stable_fast"):
         return [str(value) for value in range(4, 16)]
     if model_family == "grok-imagine-video-1.5-preview":
@@ -1235,7 +1238,7 @@ def models():
                 "max_images": get_max_images_for_model(model_family),
                 "resolutions": get_allowed_resolutions(model_family),
                 "seconds_options": get_allowed_seconds(model_family),
-                "aspect_ratios": ["16:9", "9:16", "1:1"] if model_family in ("LuxVid_video", "videos_stable_fast", "wy-sd2", "video-v1-15s", "dolo", "xh-sdas-fast-720p", "xh-sdas-pro-720p") else (["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"] if model_family in ("sora-v4-fast", "sora-v3-pro") else (["16:9", "9:16"] if model_family in VEO_STABLE_MODELS else ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"])),
+                "aspect_ratios": ["16:9", "9:16", "1:1"] if model_family in ("videos_pro", "LuxVid_video", "videos_stable_fast", "wy-sd2", "video-v1-15s", "dolo", "xh-sdas-fast-720p", "xh-sdas-pro-720p") else (["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"] if model_family in ("sora-v4-fast", "sora-v3-pro") else (["16:9", "9:16"] if model_family in VEO_STABLE_MODELS else ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"])),
                 "needs_api_key": item.get("needs_api_key", False),
             }
         )
@@ -1403,6 +1406,7 @@ def create_task():
         if model_family in PROMPT_RATIO_MODELS
         or model_family in (
             "videos",
+            "videos_pro",
             "wy-sd2",
             "sora-v4-fast",
             "sora-v3-pro",
