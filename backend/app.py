@@ -143,6 +143,7 @@ MODEL_MATRIX = {
 MODEL_OPTIONS = [
     {"label": "videos", "value": "videos"},
     {"label": "videos_pro", "value": "videos_pro"},
+    {"label": "sd_2.0_special_720p", "value": "sd_2.0_special_720p"},
     {"label": "wy-sd2", "value": "wy-sd2"},
     {"label": "sora-v4-fast", "value": "sora-v4-fast"},
     {"label": "sora-v3-pro", "value": "sora-v3-pro"},
@@ -302,6 +303,8 @@ def normalize_video_url(url: str, api_base: str):
 def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
     if model_family in ("videos", "videos_pro"):
         return model_family
+    if model_family == "sd_2.0_special_720p":
+        return model_family
     if model_family == "wy-sd2":
         return "seedance2.0-fast"
     if model_family == "sora-v4-fast":
@@ -356,6 +359,13 @@ def build_size_value(aspect_ratio: str, resolution: str):
 
 
 def get_backend_config(model_family: str):
+    if model_family == "sd_2.0_special_720p":
+        return {
+            "api_base": LUXVID_BASE_URL,
+            "api_key": LUXVID_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "seedance_special_videos_async",
+        }
     if model_family in ("videos", "videos_pro", "LuxVid_video", "videos_stable_fast"):
         return {
             "api_base": LUXVID_BASE_URL,
@@ -475,7 +485,7 @@ def get_max_images_for_model(model_family: str):
         return 7
     if model_family in ("sora-v4-fast", "sora-v3-pro"):
         return 4
-    if model_family in ("videos", "videos_pro", "wy-sd2"):
+    if model_family in ("videos", "videos_pro", "sd_2.0_special_720p", "wy-sd2"):
         return 9
     if model_family in ("LuxVid_video", "videos_stable_fast"):
         return 4
@@ -517,7 +527,7 @@ def get_allowed_seconds(model_family: str):
         return [str(value) for value in range(5, 16)]
     if model_family == "videos_pro":
         return ["10", "15"]
-    if model_family in ("videos", "wy-sd2", "LuxVid_video", "videos_stable_fast"):
+    if model_family in ("videos", "sd_2.0_special_720p", "wy-sd2", "LuxVid_video", "videos_stable_fast"):
         return [str(value) for value in range(4, 16)]
     if model_family == "grok-imagine-video-1.5-preview":
         return ["6", "10"]
@@ -644,6 +654,47 @@ class WebTaskRunner:
     def submit_task(self, task: dict):
         request_mode = task["request_mode"]
         headers = self.build_headers(task["auth_mode"], task["api_key"])
+
+        if request_mode == "seedance_special_videos_async":
+            reference_images = [upload_image_to_imgbb(Path(path)) for path in task["image_paths"][:9]]
+            content = [{"type": "text", "text": task["prompt"]}]
+            content.extend(
+                {
+                    "type": "image_url",
+                    "role": "reference_image",
+                    "image_url": {"url": image_url},
+                }
+                for image_url in reference_images
+            )
+            payload = {
+                "model": task["model_id"],
+                "ratio": task["aspect_ratio"],
+                "duration": int(str(task["seconds"])),
+                "generate_audio": True,
+                "content": content,
+            }
+            headers["Content-Type"] = "application/json"
+            self.log(
+                task["id"],
+                "submit payload => "
+                f"model={payload['model']}, ratio={payload['ratio']}, duration={payload['duration']}, "
+                f"generate_audio=true, reference_images={len(reference_images)}",
+            )
+            response = self.request_with_retry(
+                "post",
+                f"{task['api_base']}/v1/seedance-special/videos",
+                headers=headers,
+                json=payload,
+                timeout=120,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if data.get("error"):
+                raise RuntimeError(str(data.get("error")))
+            remote_task_id = data.get("task_id") or data.get("id") or data.get("taskId")
+            if not remote_task_id:
+                raise RuntimeError(f"missing task id: {data}")
+            return remote_task_id
 
         if request_mode == "luxvid_videos_async":
             reference_images = [upload_image_to_imgbb(Path(path)) for path in task["image_paths"][:9]]
@@ -1048,7 +1099,7 @@ class WebTaskRunner:
         interval = LONGXIA_POLL_INTERVAL_SECONDS if request_mode == "longxia_videos_async" else POLL_INTERVAL_SECONDS
 
         while True:
-            if request_mode in ("luxvid_videos_async", "zcb_veo_videos_async"):
+            if request_mode in ("seedance_special_videos_async", "luxvid_videos_async", "zcb_veo_videos_async"):
                 poll_url = f"{task['api_base']}/v1/result/{remote_task_id}"
             elif request_mode == "xs_sora_videos_async":
                 poll_url = f"{task['api_base']}/videos/{remote_task_id}"
@@ -1073,7 +1124,7 @@ class WebTaskRunner:
                 )
             response.raise_for_status()
             raw_data = response.json()
-            if request_mode in ("luxvid_videos_async", "zcb_veo_videos_async"):
+            if request_mode in ("seedance_special_videos_async", "luxvid_videos_async", "zcb_veo_videos_async"):
                 data = raw_data.get("data", raw_data) if isinstance(raw_data, dict) else {}
             elif request_mode in ("longxia_videos_async", "sudashui_videos_async"):
                 data = raw_data.get("data", raw_data)
