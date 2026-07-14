@@ -53,6 +53,7 @@ HANCAT_BASE_URL = env_value("HANCAT_BASE_URL", "https://img-api.xn--1ys141f4ks.c
 GROK_IMAGINE_BASE_URL = env_value("GROK_IMAGINE_BASE_URL", "https://zexitongxue.com")
 DOLO_BASE_URL = env_value("DOLO_BASE_URL", "https://zexitongxue.com")
 LUXVID_BASE_URL = env_value("LUXVID_BASE_URL", "https://zcbservice.aizfw.cn/kyyReactApiServer")
+SEEDANCE2_ASSET_UPLOAD_PATH = "/asset/seedance2/assetUpload"
 WY_SD2_BASE_URL = env_value("WY_SD2_BASE_URL", "https://api.pro666.top")
 XS_SORA_BASE_URL = env_value("XS_SORA_BASE_URL", "https://api.xs-token.com/v1")
 YCY_BASE_URL = env_value("YCY_BASE_URL", "https://ycyapi.cn")
@@ -220,6 +221,45 @@ def upload_image_to_imgbb(file_path: Path, api_key=IMGBB_API_KEY, timeout=120):
     if not payload.get("success", False) or not url:
         raise RuntimeError(f"ImgBB 上传失败: {payload}")
     return url
+
+
+def extract_seedance_asset_id(payload):
+    """Find the asset identifier across the asset service's common response shapes."""
+    if isinstance(payload, str):
+        return payload.strip()
+    if isinstance(payload, dict):
+        for key in ("asset_id", "assetId", "assetID", "id"):
+            value = payload.get(key)
+            if value not in (None, ""):
+                return str(value)
+        for value in payload.values():
+            asset_id = extract_seedance_asset_id(value)
+            if asset_id:
+                return asset_id
+    elif isinstance(payload, list):
+        for value in payload:
+            asset_id = extract_seedance_asset_id(value)
+            if asset_id:
+                return asset_id
+    return ""
+
+
+def upload_image_to_seedance_asset(image_url: str, api_base: str, headers: dict, request_fn, timeout=120):
+    response = request_fn(
+        "post",
+        f"{api_base}{SEEDANCE2_ASSET_UPLOAD_PATH}",
+        headers={**headers, "Content-Type": "application/json"},
+        json={"url": image_url},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if isinstance(payload, dict) and payload.get("error"):
+        raise RuntimeError(str(payload["error"]))
+    asset_id = extract_seedance_asset_id(payload)
+    if not asset_id:
+        raise RuntimeError(f"seedance asset upload missing asset id: {payload}")
+    return asset_id
 
 
 def guess_mime_type(file_path: Path):
@@ -656,7 +696,16 @@ class WebTaskRunner:
         headers = self.build_headers(task["auth_mode"], task["api_key"])
 
         if request_mode == "seedance_special_videos_async":
-            reference_images = [upload_image_to_imgbb(Path(path)) for path in task["image_paths"][:9]]
+            reference_images = []
+            for path in task["image_paths"][:9]:
+                image_url = upload_image_to_imgbb(Path(path))
+                asset_id = upload_image_to_seedance_asset(
+                    image_url,
+                    task["api_base"],
+                    headers,
+                    self.request_with_retry,
+                )
+                reference_images.append(asset_id)
             content = [{"type": "text", "text": task["prompt"]}]
             content.extend(
                 {
