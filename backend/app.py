@@ -56,6 +56,7 @@ LUXVID_BASE_URL = env_value("LUXVID_BASE_URL", "https://zcbservice.aizfw.cn/kyyR
 SEEDANCE2_ASSET_UPLOAD_PATH = "/asset/seedance2/assetUpload"
 WY_SD2_BASE_URL = env_value("WY_SD2_BASE_URL", "https://api.pro666.top")
 XS_SORA_BASE_URL = env_value("XS_SORA_BASE_URL", "https://api.xs-token.com/v1")
+AICLUB_BASE_URL = env_value("AICLUB_BASE_URL", "https://api.aiclub.cv")
 YCY_BASE_URL = env_value("YCY_BASE_URL", "https://ycyapi.cn")
 IMGBB_UPLOAD_URL = env_value("IMGBB_UPLOAD_URL", "https://api.imgbb.com/1/upload")
 SORA_VIP3_BASE_URL = env_value("SORA_VIP3_BASE_URL", "https://socdabat.it.com")
@@ -72,6 +73,7 @@ DOLO_API_KEY = env_value("DOLO_API_KEY", "sk-wWf6F6bcdk1Hs1Rd9HKfktf9Em3iJKh5NKx
 LUXVID_API_KEY = env_value("LUXVID_API_KEY")
 WY_SD2_API_KEY = env_value("WY_SD2_API_KEY", "sk-1Yo8xvcztSH4ahlMjLIZnURoZCWo40Ur7T68XZ1fB9UU0n9h")
 XS_SORA_API_KEY = env_value("XS_SORA_API_KEY", "sk-xs-f462a66007a2d9597e79b627b6fb9529b6fadaf24e80933e")
+AICLUB_API_KEY = env_value("AICLUB_API_KEY")
 YCY_API_KEY = env_value("YCY_API_KEY", "sk-c2zWmrl9MOBfUFw8RLb0iOXClbce94ejxp851TAYytibMXiy")
 VEO_STABLE_API_KEY = env_value("VEO_STABLE_API_KEY", LUXVID_API_KEY)
 IMGBB_API_KEY = env_value("IMGBB_API_KEY")
@@ -148,6 +150,7 @@ MODEL_OPTIONS = [
     {"label": "wy-sd2", "value": "wy-sd2"},
     {"label": "sora-v4-fast", "value": "sora-v4-fast"},
     {"label": "sora-v3-pro", "value": "sora-v3-pro"},
+    {"label": "sora-2-pro", "value": "sora-2-pro"},
     {"label": "video-v1-15s", "value": "video-v1-15s"},
     {"label": "dolo", "value": "dolo"},
     {"label": "xh-sdas-fast-720p", "value": "xh-sdas-fast-720p"},
@@ -351,6 +354,8 @@ def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
         return "sora-v4-fast"
     if model_family == "sora-v3-pro":
         return "sora-v3-pro"
+    if model_family == "sora-2-pro":
+        return "sora-2-pro"
     if model_family == "video-v1-15s":
         return "video-v1-15s"
     if model_family == "dolo":
@@ -426,6 +431,13 @@ def get_backend_config(model_family: str):
             "api_key": XS_SORA_API_KEY,
             "auth_mode": "bearer",
             "request_mode": "xs_sora_videos_async",
+        }
+    if model_family == "sora-2-pro":
+        return {
+            "api_base": AICLUB_BASE_URL,
+            "api_key": AICLUB_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "aiclub_sora_videos_async",
         }
     if model_family == "video-v1-15s":
         return {
@@ -515,6 +527,8 @@ def build_request_prompt(model_family: str, prompt: str, aspect_ratio: str):
 
 
 def get_max_images_for_model(model_family: str):
+    if model_family == "sora-2-pro":
+        return 1
     if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p"):
         return 4
     if model_family == "dolo":
@@ -557,6 +571,8 @@ def get_allowed_resolutions(model_family: str):
 
 
 def get_allowed_seconds(model_family: str):
+    if model_family == "sora-2-pro":
+        return ["4", "8", "12"]
     if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p"):
         return ["10", "15"]
     if model_family == "dolo":
@@ -740,6 +756,41 @@ class WebTaskRunner:
             data = response.json()
             if data.get("error"):
                 raise RuntimeError(str(data.get("error")))
+            remote_task_id = data.get("task_id") or data.get("id") or data.get("taskId")
+            if not remote_task_id:
+                raise RuntimeError(f"missing task id: {data}")
+            return remote_task_id
+
+        if request_mode == "aiclub_sora_videos_async":
+            payload = {
+                "model": task["model_id"],
+                "prompt": task["prompt"],
+                "duration": int(str(task["seconds"])),
+                "aspect_ratio": task["aspect_ratio"],
+                "resolution": "720p",
+                "image": process_image_to_data_url(Path(task["image_paths"][0])),
+            }
+            headers["Content-Type"] = "application/json"
+            self.log(
+                task["id"],
+                "submit payload => "
+                f"model={payload['model']}, duration={payload['duration']}, "
+                f"aspect_ratio={payload['aspect_ratio']}, resolution=720p, image=1",
+            )
+            response = self.request_with_retry(
+                "post",
+                f"{task['api_base']}/v1/videos",
+                headers=headers,
+                json=payload,
+                timeout=120,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if data.get("error"):
+                error = data["error"]
+                if isinstance(error, dict):
+                    error = error.get("message") or str(error)
+                raise RuntimeError(str(error))
             remote_task_id = data.get("task_id") or data.get("id") or data.get("taskId")
             if not remote_task_id:
                 raise RuntimeError(f"missing task id: {data}")
@@ -1158,7 +1209,7 @@ class WebTaskRunner:
                 poll_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
             elif request_mode == "sudashui_videos_async":
                 poll_url = f"{task['api_base']}/v1/video/generations/{remote_task_id}"
-            elif request_mode in ("videos_async", "sora_vip3_multi_image", "longxia_videos_async", "grok_imagine_videos_async", "hancat_videos_async", "wy_sd2_videos_async"):
+            elif request_mode in ("aiclub_sora_videos_async", "videos_async", "sora_vip3_multi_image", "longxia_videos_async", "grok_imagine_videos_async", "hancat_videos_async", "wy_sd2_videos_async"):
                 poll_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
             else:
                 poll_url = f"{task['api_base']}/v1/tasks/{remote_task_id}"
@@ -1221,6 +1272,8 @@ class WebTaskRunner:
                         remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
                     elif request_mode == "xs_sora_videos_async":
                         remote_url = f"{task['api_base']}/videos/{remote_task_id}"
+                    elif request_mode == "aiclub_sora_videos_async":
+                        remote_url = f"{task['api_base']}/v1/videos/{remote_task_id}/content"
                 if not remote_url:
                     raise RuntimeError(f"missing video url: {raw_data}")
                 return remote_url
@@ -1338,7 +1391,7 @@ def models():
                 "max_images": get_max_images_for_model(model_family),
                 "resolutions": get_allowed_resolutions(model_family),
                 "seconds_options": get_allowed_seconds(model_family),
-                "aspect_ratios": ["16:9", "9:16", "1:1"] if model_family in ("videos_pro", "LuxVid_video", "videos_stable_fast", "wy-sd2", "video-v1-15s", "dolo", "xh-sdas-fast-720p", "xh-sdas-pro-720p") else (["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"] if model_family in ("sora-v4-fast", "sora-v3-pro") else (["16:9", "9:16"] if model_family in VEO_STABLE_MODELS else ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"])),
+                "aspect_ratios": ["16:9", "9:16", "1:1"] if model_family in ("videos_pro", "LuxVid_video", "videos_stable_fast", "wy-sd2", "video-v1-15s", "dolo", "xh-sdas-fast-720p", "xh-sdas-pro-720p") else (["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"] if model_family in ("sora-v4-fast", "sora-v3-pro") else (["16:9", "9:16"] if model_family == "sora-2-pro" or model_family in VEO_STABLE_MODELS else ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"])),
                 "needs_api_key": item.get("needs_api_key", False),
             }
         )
@@ -1510,6 +1563,7 @@ def create_task():
             "wy-sd2",
             "sora-v4-fast",
             "sora-v3-pro",
+            "sora-2-pro",
             "video-v1-15s",
             "dolo",
             "xh-sdas-fast-720p",
