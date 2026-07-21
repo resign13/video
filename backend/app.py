@@ -247,12 +247,19 @@ def extract_seedance_asset_id(payload):
     return ""
 
 
-def upload_image_to_seedance_asset(image_url: str, api_base: str, headers: dict, request_fn, timeout=120):
+def upload_image_to_seedance_asset(
+    image_url: str,
+    asset_name: str,
+    api_base: str,
+    headers: dict,
+    request_fn,
+    timeout=120,
+):
     response = request_fn(
         "post",
         f"{api_base}{SEEDANCE2_ASSET_UPLOAD_PATH}",
         headers={**headers, "Content-Type": "application/json"},
-        json={"url": image_url},
+        json={"assetType": "Image", "url": image_url, "name": asset_name},
         timeout=timeout,
     )
     response.raise_for_status()
@@ -262,7 +269,9 @@ def upload_image_to_seedance_asset(image_url: str, api_base: str, headers: dict,
     asset_id = extract_seedance_asset_id(payload)
     if not asset_id:
         raise RuntimeError(f"seedance asset upload missing asset id: {payload}")
-    return asset_id
+    if asset_id.startswith(("assetId://", "asset://")):
+        return asset_id
+    return f"assetId://{asset_id}"
 
 
 def guess_mime_type(file_path: Path):
@@ -717,6 +726,7 @@ class WebTaskRunner:
                 image_url = upload_image_to_imgbb(Path(path))
                 asset_id = upload_image_to_seedance_asset(
                     image_url,
+                    Path(path).name,
                     task["api_base"],
                     headers,
                     self.request_with_retry,
