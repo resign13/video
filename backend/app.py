@@ -47,6 +47,7 @@ def env_value(name: str, default: str = ""):
 
 load_dotenv_if_present()
 
+PUBLIC_BASE_URL = env_value("PUBLIC_BASE_URL", "https://video.smawell.shop").rstrip("/")
 BASE_URL = env_value("BASE_URL", "https://api.dealonhorizon.us")
 SEEDANCE2_BASE_URL = env_value("SEEDANCE2_BASE_URL", "https://api.xbyjs.top")
 HANCAT_BASE_URL = env_value("HANCAT_BASE_URL", "https://img-api.xn--1ys141f4ks.com")
@@ -768,8 +769,8 @@ class WebTaskRunner:
 
         if request_mode == "seedance_special_videos_async":
             reference_images = []
-            for path in task["image_paths"][:9]:
-                image_url = upload_image_to_imgbb(Path(path))
+            for image_index, path in enumerate(task["image_paths"][:9]):
+                image_url = f"{PUBLIC_BASE_URL}/api/tasks/{task['id']}/images/{image_index}"
                 asset_id = upload_image_to_seedance_asset(
                     image_url,
                     Path(path).name,
