@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 import requests
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
-from PIL import Image
+from PIL import Image, ImageOps
 from requests import exceptions as requests_exceptions
 from werkzeug.utils import secure_filename
 
@@ -87,6 +87,9 @@ LONGXIA_POLL_INTERVAL_SECONDS = 120
 TRANSIENT_REQUEST_RETRIES = 4
 DOWNLOAD_RETRIES = 3
 RETRY_SLEEP_SECONDS = 2
+IMGBB_UPLOAD_RETRIES = 3
+IMGBB_MAX_IMAGE_DIMENSION = 2048
+IMGBB_JPEG_QUALITY = 88
 MAX_REFERENCES = 9
 FILE_RETENTION_SECONDS = 5 * 60 * 60
 CLEANUP_INTERVAL_SECONDS = 10 * 60
@@ -210,20 +213,63 @@ def load_file_base64(file_path: Path):
     return base64.b64encode(file_path.read_bytes()).decode("utf-8")
 
 
+def prepare_image_for_imgbb(file_path: Path):
+    with Image.open(file_path) as source:
+        image = ImageOps.exif_transpose(source)
+        image.load()
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        if max(image.size) > IMGBB_MAX_IMAGE_DIMENSION:
+            image.thumbnail(
+                (IMGBB_MAX_IMAGE_DIMENSION, IMGBB_MAX_IMAGE_DIMENSION),
+                resample_filter(),
+            )
+        buffer = BytesIO()
+        image.save(
+            buffer,
+            format="JPEG",
+            quality=IMGBB_JPEG_QUALITY,
+            optimize=True,
+            progressive=False,
+        )
+    content = buffer.getvalue()
+    return base64.b64encode(content).decode("ascii"), len(content)
+
+
 def upload_image_to_imgbb(file_path: Path, api_key=IMGBB_API_KEY, timeout=120):
-    response = requests.post(
-        IMGBB_UPLOAD_URL,
-        data={"key": api_key, "image": load_file_base64(file_path), "name": file_path.stem},
-        timeout=timeout,
-    )
-    if response.status_code not in (200, 201):
-        raise RuntimeError(f"ImgBB 上传失败 {response.status_code}: {response.text}")
-    payload = response.json()
-    data = payload.get("data") or {}
-    url = data.get("url") or data.get("display_url")
-    if not payload.get("success", False) or not url:
-        raise RuntimeError(f"ImgBB 上传失败: {payload}")
-    return url
+    encoded_image, converted_bytes = prepare_image_for_imgbb(file_path)
+    for attempt in range(1, IMGBB_UPLOAD_RETRIES + 1):
+        response = requests.post(
+            IMGBB_UPLOAD_URL,
+            data={"key": api_key, "image": encoded_image, "name": file_path.stem},
+            timeout=timeout,
+        )
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {}
+
+        error = payload.get("error") or {} if isinstance(payload, dict) else {}
+        error_code = str(error.get("code", "")) if isinstance(error, dict) else ""
+        if error_code == "111" and attempt < IMGBB_UPLOAD_RETRIES:
+            time.sleep(RETRY_SLEEP_SECONDS * attempt)
+            continue
+
+        if response.status_code not in (200, 201):
+            raise RuntimeError(
+                f"ImgBB 上传失败 {response.status_code} ({file_path.name}, "
+                f"converted_bytes={converted_bytes}, attempt={attempt}): {response.text}"
+            )
+        data = payload.get("data") or {}
+        url = data.get("url") or data.get("display_url")
+        if not payload.get("success", False) or not url:
+            raise RuntimeError(
+                f"ImgBB 上传失败 ({file_path.name}, converted_bytes={converted_bytes}, "
+                f"attempt={attempt}): {payload}"
+            )
+        return url
+
+    raise RuntimeError(f"ImgBB 上传失败: {file_path.name}")
 
 
 def extract_seedance_asset_id(payload):
