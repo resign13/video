@@ -47,7 +47,6 @@ def env_value(name: str, default: str = ""):
 
 load_dotenv_if_present()
 
-PUBLIC_BASE_URL = env_value("PUBLIC_BASE_URL", "https://video.smawell.shop").rstrip("/")
 BASE_URL = env_value("BASE_URL", "https://api.dealonhorizon.us")
 SEEDANCE2_BASE_URL = env_value("SEEDANCE2_BASE_URL", "https://api.xbyjs.top")
 HANCAT_BASE_URL = env_value("HANCAT_BASE_URL", "https://img-api.xn--1ys141f4ks.com")
@@ -60,6 +59,7 @@ XS_SORA_BASE_URL = env_value("XS_SORA_BASE_URL", "https://api.xs-token.com/v1")
 AICLUB_BASE_URL = env_value("AICLUB_BASE_URL", "https://api.aiclub.cv")
 YCY_BASE_URL = env_value("YCY_BASE_URL", "https://ycyapi.cn")
 IMGBB_UPLOAD_URL = env_value("IMGBB_UPLOAD_URL", "https://api.imgbb.com/1/upload")
+UGUU_UPLOAD_URL = env_value("UGUU_UPLOAD_URL", "https://uguu.se/upload.php")
 SORA_VIP3_BASE_URL = env_value("SORA_VIP3_BASE_URL", "https://socdabat.it.com")
 SORA_VIP3_1080_BASE_URL = env_value("SORA_VIP3_1080_BASE_URL", "https://zexitongxue.com")
 LONGXIA_BASE_URL = env_value("LONGXIA_BASE_URL", "https://api.longxiaai.store")
@@ -273,17 +273,40 @@ def upload_image_to_imgbb(file_path: Path, api_key=IMGBB_API_KEY, timeout=120):
     raise RuntimeError(f"ImgBB 上传失败: {file_path.name}")
 
 
+def upload_image_to_uguu(file_path: Path, timeout=60):
+    encoded_image, converted_bytes = prepare_image_for_imgbb(file_path)
+    image_content = base64.b64decode(encoded_image)
+    upload_name = f"{file_path.stem or 'image'}.jpg"
+    response = requests.post(
+        UGUU_UPLOAD_URL,
+        files={"files[]": (upload_name, image_content, "image/jpeg")},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    files = payload.get("files") or [] if isinstance(payload, dict) else []
+    url = files[0].get("url") if files and isinstance(files[0], dict) else ""
+    if not payload.get("success", False) or not url:
+        raise RuntimeError(
+            f"Uguu upload failed ({file_path.name}, converted_bytes={converted_bytes}): {payload}"
+        )
+    return url
+
+
 def extract_seedance_asset_id(payload):
     """Find the asset identifier across the asset service's common response shapes."""
     if isinstance(payload, str):
-        return payload.strip()
+        value = payload.strip()
+        if value.startswith(("assetId://", "asset://", "asset-")) or value.isdigit():
+            return value
+        return ""
     if isinstance(payload, dict):
         for key in ("asset_id", "assetId", "assetID", "id"):
             value = payload.get(key)
             if value not in (None, ""):
                 return str(value)
-        for value in payload.values():
-            asset_id = extract_seedance_asset_id(value)
+        for key in ("data", "result", "payload"):
+            asset_id = extract_seedance_asset_id(payload.get(key))
             if asset_id:
                 return asset_id
     elif isinstance(payload, list):
@@ -300,7 +323,7 @@ def upload_image_to_seedance_asset(
     api_base: str,
     headers: dict,
     request_fn,
-    timeout=120,
+    timeout=45,
 ):
     response = request_fn(
         "post",
@@ -311,8 +334,13 @@ def upload_image_to_seedance_asset(
     )
     response.raise_for_status()
     payload = response.json()
-    if isinstance(payload, dict) and payload.get("error"):
-        raise RuntimeError(str(payload["error"]))
+    if isinstance(payload, dict):
+        if payload.get("error"):
+            raise RuntimeError(str(payload["error"]))
+        code = payload.get("code")
+        if code not in (None, 0, "0", 200, "200"):
+            message = payload.get("msg") or payload.get("message") or str(payload)
+            raise RuntimeError(f"seedance asset upload failed code={code}: {message}")
     asset_id = extract_seedance_asset_id(payload)
     if not asset_id:
         raise RuntimeError(f"seedance asset upload missing asset id: {payload}")
@@ -769,16 +797,25 @@ class WebTaskRunner:
 
         if request_mode == "seedance_special_videos_async":
             reference_images = []
-            for image_index, path in enumerate(task["image_paths"][:9]):
-                image_url = f"{PUBLIC_BASE_URL}/api/tasks/{task['id']}/images/{image_index}"
+            image_paths = task["image_paths"][:9]
+            for image_index, path in enumerate(image_paths, start=1):
+                self.update(
+                    task["id"],
+                    status_text=f"uploading reference {image_index}/{len(image_paths)}",
+                )
+                self.log(task["id"], f"uploading temporary image {image_index}/{len(image_paths)}")
+                image_url = upload_image_to_uguu(Path(path))
+                self.log(task["id"], f"registering asset {image_index}/{len(image_paths)}")
                 asset_id = upload_image_to_seedance_asset(
                     image_url,
                     Path(path).name,
                     task["api_base"],
                     headers,
-                    self.request_with_retry,
+                    requests.request,
                 )
                 reference_images.append(asset_id)
+                self.log(task["id"], f"asset ready {image_index}/{len(image_paths)}")
+            self.update(task["id"], status_text="submitting")
             content = [{"type": "text", "text": task["prompt"]}]
             content.extend(
                 {
