@@ -65,6 +65,8 @@ SORA_VIP3_1080_BASE_URL = env_value("SORA_VIP3_1080_BASE_URL", "https://zexitong
 LONGXIA_BASE_URL = env_value("LONGXIA_BASE_URL", "https://api.longxiaai.store")
 SUDASHUI_BASE_URL = env_value("SUDASHUI_BASE_URL", "https://api.sudashuiapi.com")
 SUDASHUI_UPLOAD_URL = env_value("SUDASHUI_UPLOAD_URL", "https://files.sudashuiapi.com")
+MEAICC_BASE_URL = env_value("MEAICC_BASE_URL", "https://api.meaicc.com")
+PUBLIC_WEB_BASE_URL = env_value("PUBLIC_WEB_BASE_URL", "https://video.smawell.shop")
 
 DEFAULT_API_KEY = env_value("DEFAULT_API_KEY")
 SEEDANCE2_API_KEY = env_value("SEEDANCE2_API_KEY")
@@ -82,9 +84,11 @@ SORA_VIP3_API_KEY = env_value("SORA_VIP3_API_KEY")
 SORA_VIP3_1080_API_KEY = env_value("SORA_VIP3_1080_API_KEY")
 LONGXIA_API_KEY = env_value("LONGXIA_API_KEY")
 SUDASHUI_API_KEY = env_value("SUDASHUI_API_KEY", "sk-IHScGlbGWzhRbsBQ5d7fz3R2v0bPfvPpf4erDbMJUpViPvKF")
+MEAICC_API_KEY = env_value("MEAICC_API_KEY")
 
 POLL_INTERVAL_SECONDS = 5
 LONGXIA_POLL_INTERVAL_SECONDS = 120
+MEAICC_POLL_INTERVAL_SECONDS = 20
 TRANSIENT_REQUEST_RETRIES = 4
 DOWNLOAD_RETRIES = 3
 RETRY_SLEEP_SECONDS = 2
@@ -99,6 +103,7 @@ SECONDS_OPTIONS = ["5", "10", "15"]
 PROMPT_RATIO_MODELS = {"seedance2", "jimeng-video-3.5-pro-12s", "sora-2-12s"}
 LOW_RES_ONLY_MODELS = {"videos", "videos_pro", "LuxVid_video", "videos_stable_fast", "grok-imagine-video-1.5-preview"}
 VEO_STABLE_MODELS = {"veo_3_1_pro_stable", "veo_3_1_fast", "veo_3_1_pro"}
+MEAICC_MODELS = {"sd-2-c1", "sd-2-c2", "sd-2-c4", "sd-2-c5", "sd-2-c7", "sd-2-c8"}
 
 MODEL_MATRIX = {
     "veo3 fast": {
@@ -151,6 +156,12 @@ MODEL_OPTIONS = [
     {"label": "videos", "value": "videos"},
     {"label": "videos_pro", "value": "videos_pro"},
     {"label": "sd_2.0_special_720p", "value": "sd_2.0_special_720p"},
+    {"label": "sd-2-c1", "value": "sd-2-c1"},
+    {"label": "sd-2-c2", "value": "sd-2-c2"},
+    {"label": "sd-2-c4", "value": "sd-2-c4"},
+    {"label": "sd-2-c5", "value": "sd-2-c5"},
+    {"label": "sd-2-c7", "value": "sd-2-c7"},
+    {"label": "sd-2-c8", "value": "sd-2-c8"},
     {"label": "sora-2-pro", "value": "sora-2-pro"},
     {"label": "seedance2", "value": "LuxVid_video"},
     {"label": "seedance2 fast", "value": "videos_stable_fast"},
@@ -420,7 +431,13 @@ def normalize_video_url(url: str, api_base: str):
     return f"{api_base}/{url}"
 
 
+def build_public_task_image_url(task_id: str, image_index: int):
+    return f"{PUBLIC_WEB_BASE_URL.rstrip('/')}/api/tasks/{task_id}/images/{image_index}"
+
+
 def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
+    if model_family in MEAICC_MODELS:
+        return model_family
     if model_family in ("videos", "videos_pro"):
         return model_family
     if model_family == "sd_2.0_special_720p":
@@ -481,6 +498,13 @@ def build_size_value(aspect_ratio: str, resolution: str):
 
 
 def get_backend_config(model_family: str):
+    if model_family in MEAICC_MODELS:
+        return {
+            "api_base": MEAICC_BASE_URL,
+            "api_key": MEAICC_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "meaicc_videos_async",
+        }
     if model_family == "sd_2.0_special_720p":
         return {
             "api_base": LUXVID_BASE_URL,
@@ -604,6 +628,10 @@ def build_request_prompt(model_family: str, prompt: str, aspect_ratio: str):
 
 
 def get_max_images_for_model(model_family: str):
+    if model_family == "sd-2-c4":
+        return 4
+    if model_family in MEAICC_MODELS:
+        return 9
     if model_family == "sora-2-pro":
         return 1
     if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p"):
@@ -626,6 +654,8 @@ def get_max_images_for_model(model_family: str):
 
 
 def get_allowed_resolutions(model_family: str):
+    if model_family in MEAICC_MODELS:
+        return ["720p"]
     if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p"):
         return ["720p"]
     if model_family == "dolo":
@@ -648,6 +678,8 @@ def get_allowed_resolutions(model_family: str):
 
 
 def get_allowed_seconds(model_family: str):
+    if model_family in MEAICC_MODELS:
+        return ["10", "15"]
     if model_family == "sora-2-pro":
         return ["4", "8", "12"]
     if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p"):
@@ -667,6 +699,27 @@ def get_allowed_seconds(model_family: str):
     if model_family in ("veo3.1-components", "veo3.1-fast-components") or model_family in VEO_STABLE_MODELS:
         return ["8"]
     return SECONDS_OPTIONS
+
+
+def get_allowed_aspect_ratios(model_family: str):
+    if model_family in MEAICC_MODELS:
+        return ["16:9", "9:16", "1:1", "4:3", "3:4"]
+    if model_family in (
+        "videos_pro",
+        "LuxVid_video",
+        "videos_stable_fast",
+        "wy-sd2",
+        "video-v1-15s",
+        "dolo",
+        "xh-sdas-fast-720p",
+        "xh-sdas-pro-720p",
+    ):
+        return ["16:9", "9:16", "1:1"]
+    if model_family in ("sora-v4-fast", "sora-v3-pro"):
+        return ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"]
+    if model_family == "sora-2-pro" or model_family in VEO_STABLE_MODELS:
+        return ["16:9", "9:16"]
+    return ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]
 
 
 def build_grok_imagine_size_value(aspect_ratio: str):
@@ -787,6 +840,57 @@ class WebTaskRunner:
     def submit_task(self, task: dict):
         request_mode = task["request_mode"]
         headers = self.build_headers(task["auth_mode"], task["api_key"])
+
+        if request_mode == "meaicc_videos_async":
+            media = [
+                {
+                    "type": "reference_image",
+                    "url": build_public_task_image_url(task["id"], image_index),
+                }
+                for image_index, _ in enumerate(task["image_paths"])
+            ]
+            resolution = "720p"
+            payload = {
+                "model": task["model_id"],
+                "input": {
+                    "prompt": task["prompt"],
+                    "media": media,
+                },
+                "parameters": {
+                    "resolution": resolution,
+                    "ratio": task["aspect_ratio"],
+                    "duration": int(str(task["seconds"])),
+                },
+            }
+            headers["Content-Type"] = "application/json"
+            self.log(
+                task["id"],
+                "submit payload => "
+                f"model={payload['model']}, resolution={resolution}, "
+                f"ratio={task['aspect_ratio']}, duration={task['seconds']}, "
+                f"reference_images={len(media)}",
+            )
+            response = self.request_with_retry(
+                "post",
+                f"{task['api_base']}/v1/videos",
+                headers=headers,
+                json=payload,
+                timeout=120,
+            )
+            if response.status_code >= 400:
+                raise RuntimeError(f"meaicc submit failed {response.status_code}: {response.text}")
+            data = response.json()
+            if isinstance(data.get("data"), dict):
+                data = data["data"]
+            status = str(data.get("status") or "")
+            if status.upper().startswith("FAILED"):
+                raise RuntimeError(status.split(":", 1)[-1].strip() or "creation failed")
+            if data.get("error"):
+                raise RuntimeError(str(data["error"]))
+            remote_task_id = data.get("task_id") or data.get("id") or data.get("taskId")
+            if not remote_task_id:
+                raise RuntimeError(f"missing task id: {data}")
+            return remote_task_id
 
         if request_mode == "seedance_special_videos_async":
             reference_images = []
@@ -1283,7 +1387,12 @@ class WebTaskRunner:
         headers = self.build_headers(task["auth_mode"], task["api_key"])
         request_mode = task["request_mode"]
         pulse_progress = 20
-        interval = LONGXIA_POLL_INTERVAL_SECONDS if request_mode == "longxia_videos_async" else POLL_INTERVAL_SECONDS
+        if request_mode == "longxia_videos_async":
+            interval = LONGXIA_POLL_INTERVAL_SECONDS
+        elif request_mode == "meaicc_videos_async":
+            interval = MEAICC_POLL_INTERVAL_SECONDS
+        else:
+            interval = POLL_INTERVAL_SECONDS
 
         while True:
             if request_mode in ("seedance_special_videos_async", "luxvid_videos_async", "zcb_veo_videos_async"):
@@ -1296,7 +1405,7 @@ class WebTaskRunner:
                 poll_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
             elif request_mode == "sudashui_videos_async":
                 poll_url = f"{task['api_base']}/v1/video/generations/{remote_task_id}"
-            elif request_mode in ("aiclub_sora_videos_async", "videos_async", "sora_vip3_multi_image", "longxia_videos_async", "grok_imagine_videos_async", "hancat_videos_async", "wy_sd2_videos_async"):
+            elif request_mode in ("aiclub_sora_videos_async", "videos_async", "sora_vip3_multi_image", "longxia_videos_async", "grok_imagine_videos_async", "hancat_videos_async", "wy_sd2_videos_async", "meaicc_videos_async"):
                 poll_url = f"{task['api_base']}/v1/videos/{remote_task_id}"
             else:
                 poll_url = f"{task['api_base']}/v1/tasks/{remote_task_id}"
@@ -1336,6 +1445,7 @@ class WebTaskRunner:
                     data.get("video_url")
                     or data.get("url")
                     or data.get("result_url")
+                    or data.get("object")
                     or result.get("file_url")
                     or result.get("url")
                     or raw_data.get("video_url")
@@ -1364,10 +1474,12 @@ class WebTaskRunner:
                 if not remote_url:
                     raise RuntimeError(f"missing video url: {raw_data}")
                 return remote_url
-            elif status in ("failed", "failure", "error"):
+            elif status in ("failed", "failure", "error") or status.startswith("failed:"):
                 error_text = data.get("error")
                 if isinstance(error_text, dict):
                     error_text = error_text.get("message") or str(error_text)
+                if not error_text and status.startswith("failed:"):
+                    error_text = status.split(":", 1)[1].strip()
                 raise RuntimeError(error_text or str(raw_data))
 
             time.sleep(interval)
@@ -1478,7 +1590,7 @@ def models():
                 "max_images": get_max_images_for_model(model_family),
                 "resolutions": get_allowed_resolutions(model_family),
                 "seconds_options": get_allowed_seconds(model_family),
-                "aspect_ratios": ["16:9", "9:16", "1:1"] if model_family in ("videos_pro", "LuxVid_video", "videos_stable_fast", "wy-sd2", "video-v1-15s", "dolo", "xh-sdas-fast-720p", "xh-sdas-pro-720p") else (["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"] if model_family in ("sora-v4-fast", "sora-v3-pro") else (["16:9", "9:16"] if model_family == "sora-2-pro" or model_family in VEO_STABLE_MODELS else ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"])),
+                "aspect_ratios": get_allowed_aspect_ratios(model_family),
                 "needs_api_key": item.get("needs_api_key", False),
             }
         )
@@ -1644,6 +1756,7 @@ def create_task():
     size_value = (
         ""
         if model_family in PROMPT_RATIO_MODELS
+        or model_family in MEAICC_MODELS
         or model_family in (
             "videos",
             "videos_pro",
