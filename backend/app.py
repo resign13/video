@@ -218,7 +218,7 @@ def load_file_base64(file_path: Path):
     return base64.b64encode(file_path.read_bytes()).decode("utf-8")
 
 
-def prepare_image_for_imgbb(file_path: Path):
+def prepare_image_as_jpeg(file_path: Path):
     with Image.open(file_path) as source:
         image = ImageOps.exif_transpose(source)
         image.load()
@@ -237,7 +237,11 @@ def prepare_image_for_imgbb(file_path: Path):
             optimize=True,
             progressive=False,
         )
-    content = buffer.getvalue()
+    return buffer.getvalue()
+
+
+def prepare_image_for_imgbb(file_path: Path):
+    content = prepare_image_as_jpeg(file_path)
     return base64.b64encode(content).decode("ascii"), len(content)
 
 
@@ -432,7 +436,7 @@ def normalize_video_url(url: str, api_base: str):
 
 
 def build_public_task_image_url(task_id: str, image_index: int):
-    return f"{PUBLIC_WEB_BASE_URL.rstrip('/')}/api/tasks/{task_id}/images/{image_index}"
+    return f"{PUBLIC_WEB_BASE_URL.rstrip('/')}/api/tasks/{task_id}/reference-images/{image_index}.jpg"
 
 
 def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
@@ -1626,6 +1630,7 @@ def download_task(task_id: str):
 
 
 @app.get("/api/tasks/<task_id>/images/<int:image_index>")
+@app.get("/api/tasks/<task_id>/reference-images/<int:image_index>.jpg")
 def get_task_image(task_id: str, image_index: int):
     with TASK_LOCK:
         task = TASKS.get(task_id)
@@ -1637,7 +1642,13 @@ def get_task_image(task_id: str, image_index: int):
     image_path = image_paths[image_index]
     if not os.path.exists(image_path):
         return jsonify({"error": "image file missing"}), 404
-    return send_file(image_path)
+    image_content = prepare_image_as_jpeg(Path(image_path))
+    return send_file(
+        BytesIO(image_content),
+        mimetype="image/jpeg",
+        download_name=f"reference_{image_index + 1}.jpg",
+        max_age=300,
+    )
 
 
 @app.post("/api/tasks/<task_id>/rerun")
