@@ -89,6 +89,8 @@ MEAICC_API_KEY = env_value("MEAICC_API_KEY")
 POLL_INTERVAL_SECONDS = 5
 LONGXIA_POLL_INTERVAL_SECONDS = 120
 MEAICC_POLL_INTERVAL_SECONDS = 20
+MEAICC_RATE_LIMIT_RETRY_SECONDS = 30
+MEAICC_RATE_LIMIT_RETRIES = 60
 TRANSIENT_REQUEST_RETRIES = 4
 DOWNLOAD_RETRIES = 3
 RETRY_SLEEP_SECONDS = 2
@@ -103,7 +105,18 @@ SECONDS_OPTIONS = ["5", "10", "15"]
 PROMPT_RATIO_MODELS = {"seedance2", "jimeng-video-3.5-pro-12s", "sora-2-12s"}
 LOW_RES_ONLY_MODELS = {"videos", "videos_pro", "LuxVid_video", "videos_stable_fast", "grok-imagine-video-1.5-preview"}
 VEO_STABLE_MODELS = {"veo_3_1_pro_stable", "veo_3_1_fast", "veo_3_1_pro"}
-MEAICC_MODELS = {"sd-2-c1", "sd-2-c2", "sd-2-c4", "sd-2-c5", "sd-2-c7", "sd-2-c8"}
+MEAICC_MODELS = {
+    "sd-2-c1",
+    "sd-2-c2",
+    "sd-2-c3",
+    "sd-2-c4",
+    "sd-2-c5",
+    "sd-2-c6",
+    "sd-2-c7",
+    "sd-2-c8",
+    "sd-2-c9",
+}
+MEAICC_GENERATION_LOCK = threading.Lock()
 
 MODEL_MATRIX = {
     "veo3 fast": {
@@ -158,10 +171,13 @@ MODEL_OPTIONS = [
     {"label": "sd_2.0_special_720p", "value": "sd_2.0_special_720p"},
     {"label": "sd-2-c1", "value": "sd-2-c1"},
     {"label": "sd-2-c2", "value": "sd-2-c2"},
+    {"label": "sd-2-c3", "value": "sd-2-c3"},
     {"label": "sd-2-c4", "value": "sd-2-c4"},
     {"label": "sd-2-c5", "value": "sd-2-c5"},
+    {"label": "sd-2-c6", "value": "sd-2-c6"},
     {"label": "sd-2-c7", "value": "sd-2-c7"},
     {"label": "sd-2-c8", "value": "sd-2-c8"},
+    {"label": "sd-2-c9", "value": "sd-2-c9"},
     {"label": "sora-2-pro", "value": "sora-2-pro"},
     {"label": "seedance2", "value": "LuxVid_video"},
     {"label": "seedance2 fast", "value": "videos_stable_fast"},
@@ -632,7 +648,7 @@ def build_request_prompt(model_family: str, prompt: str, aspect_ratio: str):
 
 
 def get_max_images_for_model(model_family: str):
-    if model_family == "sd-2-c4":
+    if model_family in ("sd-2-c4", "sd-2-c6"):
         return 4
     if model_family in MEAICC_MODELS:
         return 9
@@ -815,13 +831,24 @@ class WebTaskRunner:
             if not task:
                 return
         started_at = time.time()
+        generation_lock = MEAICC_GENERATION_LOCK if task["request_mode"] == "meaicc_videos_async" else None
+        generation_lock_acquired = False
         try:
+            if generation_lock:
+                if generation_lock.locked():
+                    self.update(task_id, status="queued", status_text="waiting for provider slot", progress=5)
+                    self.log(task_id, "provider concurrency slot busy; waiting in local queue")
+                generation_lock.acquire()
+                generation_lock_acquired = True
             self.update(task_id, status="running", status_text="submitting", progress=8)
             self.log(task_id, "submitting task")
             remote_task_id = self.submit_task(task)
             self.update(task_id, remote_task_id=remote_task_id, display_id=remote_task_id)
             self.log(task_id, f"remote task id: {remote_task_id}")
             remote_url = self.poll_task(task, remote_task_id)
+            if generation_lock_acquired:
+                generation_lock.release()
+                generation_lock_acquired = False
             self.update(task_id, status_text="downloading")
             local_path = self.download_video(task, remote_url, remote_task_id)
             duration = round(time.time() - started_at, 1)
@@ -840,6 +867,9 @@ class WebTaskRunner:
         except Exception as exc:
             self.update(task_id, status="failed", error=str(exc), status_text="failed")
             self.log(task_id, f"failed: {exc}")
+        finally:
+            if generation_lock_acquired:
+                generation_lock.release()
 
     def submit_task(self, task: dict):
         request_mode = task["request_mode"]
@@ -874,13 +904,31 @@ class WebTaskRunner:
                 f"ratio={task['aspect_ratio']}, duration={task['seconds']}, "
                 f"reference_images={len(media)}",
             )
-            response = self.request_with_retry(
-                "post",
-                f"{task['api_base']}/v1/videos",
-                headers=headers,
-                json=payload,
-                timeout=120,
-            )
+            response = None
+            for attempt in range(1, MEAICC_RATE_LIMIT_RETRIES + 1):
+                response = self.request_with_retry(
+                    "post",
+                    f"{task['api_base']}/v1/videos",
+                    headers=headers,
+                    json=payload,
+                    timeout=120,
+                )
+                if response.status_code != 429:
+                    self.update(task["id"], status="running", status_text="submitting", progress=8)
+                    break
+                if attempt >= MEAICC_RATE_LIMIT_RETRIES:
+                    raise RuntimeError(f"meaicc rate limit persisted: {response.text}")
+                retry_after = response.headers.get("Retry-After") if response.headers else None
+                wait_seconds = int(retry_after) if str(retry_after or "").isdigit() else MEAICC_RATE_LIMIT_RETRY_SECONDS
+                self.update(task["id"], status="queued", status_text="waiting for provider slot", progress=6)
+                self.log(
+                    task["id"],
+                    f"provider concurrency limit reached; retrying in {wait_seconds}s "
+                    f"({attempt}/{MEAICC_RATE_LIMIT_RETRIES - 1})",
+                )
+                time.sleep(wait_seconds)
+            if response is None:
+                raise RuntimeError("meaicc submit did not return a response")
             if response.status_code >= 400:
                 raise RuntimeError(f"meaicc submit failed {response.status_code}: {response.text}")
             data = response.json()
