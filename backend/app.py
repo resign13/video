@@ -91,6 +91,8 @@ LONGXIA_POLL_INTERVAL_SECONDS = 120
 MEAICC_POLL_INTERVAL_SECONDS = 20
 MEAICC_RATE_LIMIT_RETRY_SECONDS = 30
 MEAICC_RATE_LIMIT_RETRIES = 60
+POLL_RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
+POLL_HTTP_ERROR_RETRIES = 30
 TRANSIENT_REQUEST_RETRIES = 4
 DOWNLOAD_RETRIES = 3
 RETRY_SLEEP_SECONDS = 2
@@ -1445,6 +1447,7 @@ class WebTaskRunner:
             interval = MEAICC_POLL_INTERVAL_SECONDS
         else:
             interval = POLL_INTERVAL_SECONDS
+        consecutive_http_errors = 0
 
         while True:
             if request_mode in ("seedance_special_videos_async", "luxvid_videos_async", "zcb_veo_videos_async"):
@@ -1470,6 +1473,23 @@ class WebTaskRunner:
                     headers=headers,
                     timeout=60,
                 )
+            if response.status_code in POLL_RETRYABLE_STATUS_CODES:
+                consecutive_http_errors += 1
+                response_text = response.text[:500]
+                if consecutive_http_errors > POLL_HTTP_ERROR_RETRIES:
+                    raise RuntimeError(
+                        f"polling failed after {POLL_HTTP_ERROR_RETRIES} retries: "
+                        f"HTTP {response.status_code}: {response_text}"
+                    )
+                self.update(task["id"], status_text="polling service retry", progress=max(12, pulse_progress))
+                self.log(
+                    task["id"],
+                    f"poll HTTP {response.status_code}; retrying in {interval}s "
+                    f"({consecutive_http_errors}/{POLL_HTTP_ERROR_RETRIES})",
+                )
+                time.sleep(interval)
+                continue
+            consecutive_http_errors = 0
             response.raise_for_status()
             raw_data = response.json()
             if request_mode in ("seedance_special_videos_async", "luxvid_videos_async", "zcb_veo_videos_async"):
