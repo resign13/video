@@ -705,7 +705,7 @@ def get_allowed_resolutions(model_family: str):
 
 def get_allowed_seconds(model_family: str):
     if model_family == SUDASHUI_MULTI_IMAGE_MODEL:
-        return [str(value) for value in range(4, 16)]
+        return ["10", "15"]
     if model_family in MEAICC_MODELS:
         return ["10", "15"]
     if model_family == "sora-2-pro":
@@ -731,7 +731,7 @@ def get_allowed_seconds(model_family: str):
 
 def get_allowed_aspect_ratios(model_family: str):
     if model_family == SUDASHUI_MULTI_IMAGE_MODEL:
-        return ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"]
+        return ["16:9", "9:16", "4:3", "3:4", "1:1", "21:9"]
     if model_family in MEAICC_MODELS:
         return ["16:9", "9:16", "1:1", "4:3", "3:4"]
     if model_family in (
