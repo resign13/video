@@ -107,6 +107,7 @@ SECONDS_OPTIONS = ["5", "10", "15"]
 PROMPT_RATIO_MODELS = {"seedance2", "jimeng-video-3.5-pro-12s", "sora-2-12s"}
 LOW_RES_ONLY_MODELS = {"videos", "videos_pro", "LuxVid_video", "videos_stable_fast", "grok-imagine-video-1.5-preview"}
 VEO_STABLE_MODELS = {"veo_3_1_pro_stable", "veo_3_1_fast", "veo_3_1_pro"}
+SUDASHUI_MULTI_IMAGE_MODEL = "sdas-xh-sd2.0-933-3-pro-720p"
 MEAICC_MODELS = {
     "sd-2-c1",
     "sd-2-c2",
@@ -180,6 +181,7 @@ MODEL_OPTIONS = [
     {"label": "sd-2-c7", "value": "sd-2-c7"},
     {"label": "sd-2-c8", "value": "sd-2-c8"},
     {"label": "sd-2-c9", "value": "sd-2-c9"},
+    {"label": SUDASHUI_MULTI_IMAGE_MODEL, "value": SUDASHUI_MULTI_IMAGE_MODEL},
     {"label": "sora-2-pro", "value": "sora-2-pro"},
     {"label": "seedance2", "value": "LuxVid_video"},
     {"label": "seedance2 fast", "value": "videos_stable_fast"},
@@ -476,7 +478,7 @@ def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
         return "video-v1-15s"
     if model_family == "dolo":
         return "dolo"
-    if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p"):
+    if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p", SUDASHUI_MULTI_IMAGE_MODEL):
         return model_family
     if model_family == "LuxVid_video":
         return "videos_stable"
@@ -576,7 +578,7 @@ def get_backend_config(model_family: str):
             "auth_mode": "bearer",
             "request_mode": "dolo_videos_async",
         }
-    if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p"):
+    if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p", SUDASHUI_MULTI_IMAGE_MODEL):
         return {
             "api_base": SUDASHUI_BASE_URL,
             "api_key": SUDASHUI_API_KEY,
@@ -650,6 +652,8 @@ def build_request_prompt(model_family: str, prompt: str, aspect_ratio: str):
 
 
 def get_max_images_for_model(model_family: str):
+    if model_family == SUDASHUI_MULTI_IMAGE_MODEL:
+        return 9
     if model_family in ("sd-2-c4", "sd-2-c6"):
         return 4
     if model_family in MEAICC_MODELS:
@@ -678,7 +682,7 @@ def get_max_images_for_model(model_family: str):
 def get_allowed_resolutions(model_family: str):
     if model_family in MEAICC_MODELS:
         return ["720p"]
-    if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p"):
+    if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p", SUDASHUI_MULTI_IMAGE_MODEL):
         return ["720p"]
     if model_family == "dolo":
         return ["720p"]
@@ -700,6 +704,8 @@ def get_allowed_resolutions(model_family: str):
 
 
 def get_allowed_seconds(model_family: str):
+    if model_family == SUDASHUI_MULTI_IMAGE_MODEL:
+        return [str(value) for value in range(4, 16)]
     if model_family in MEAICC_MODELS:
         return ["10", "15"]
     if model_family == "sora-2-pro":
@@ -724,6 +730,8 @@ def get_allowed_seconds(model_family: str):
 
 
 def get_allowed_aspect_ratios(model_family: str):
+    if model_family == SUDASHUI_MULTI_IMAGE_MODEL:
+        return ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"]
     if model_family in MEAICC_MODELS:
         return ["16:9", "9:16", "1:1", "4:3", "3:4"]
     if model_family in (
@@ -1171,7 +1179,11 @@ class WebTaskRunner:
 
         if request_mode == "sudashui_videos_async":
             import json
-            image_urls = [upload_file_to_sudashui(Path(path), task["api_key"]) for path in task["image_paths"][:4]]
+            max_images = get_max_images_for_model(task["model_family"])
+            image_urls = [
+                upload_file_to_sudashui(Path(path), task["api_key"])
+                for path in task["image_paths"][:max_images]
+            ]
             payload_data = {
                 "aspectRatio": task["aspect_ratio"],
                 "mode": "references",
@@ -1847,6 +1859,7 @@ def create_task():
             "dolo",
             "xh-sdas-fast-720p",
             "xh-sdas-pro-720p",
+            SUDASHUI_MULTI_IMAGE_MODEL,
             "LuxVid_video",
             "videos_stable_fast",
             "grok-imagine-video-1.5-preview",
