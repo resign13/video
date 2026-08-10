@@ -108,6 +108,8 @@ PROMPT_RATIO_MODELS = {"seedance2", "jimeng-video-3.5-pro-12s", "sora-2-12s"}
 LOW_RES_ONLY_MODELS = {"videos", "videos_pro", "LuxVid_video", "videos_stable_fast", "grok-imagine-video-1.5-preview"}
 VEO_STABLE_MODELS = {"veo_3_1_pro_stable", "veo_3_1_fast", "veo_3_1_pro"}
 SUDASHUI_MULTI_IMAGE_MODEL = "sdas-xh-sd2.0-933-3-pro-720p"
+SEEDANCE25_MODEL = "seedance2.5"
+SEEDANCE25_UPSTREAM_MODEL = "seedance-2.5-c3"
 MEAICC_MODELS = {
     "sd-2-c1",
     "sd-2-c2",
@@ -184,6 +186,7 @@ MODEL_OPTIONS = [
     {"label": SUDASHUI_MULTI_IMAGE_MODEL, "value": SUDASHUI_MULTI_IMAGE_MODEL},
     {"label": "sora-2-pro", "value": "sora-2-pro"},
     {"label": "seedance2", "value": "LuxVid_video"},
+    {"label": SEEDANCE25_MODEL, "value": SEEDANCE25_MODEL},
     {"label": "seedance2 fast", "value": "videos_stable_fast"},
     {"label": "grok-imagine-video-1.5-preview", "value": "grok-imagine-video-1.5-preview"},
     # hidden temporarily: veo3.1-components
@@ -466,6 +469,8 @@ def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
         return model_family
     if model_family == "sd_2.0_special_720p":
         return model_family
+    if model_family == SEEDANCE25_MODEL:
+        return SEEDANCE25_UPSTREAM_MODEL
     if model_family == "wy-sd2":
         return "seedance2.0-fast"
     if model_family == "sora-v4-fast":
@@ -535,6 +540,13 @@ def get_backend_config(model_family: str):
             "api_key": LUXVID_API_KEY,
             "auth_mode": "bearer",
             "request_mode": "seedance_special_videos_async",
+        }
+    if model_family == SEEDANCE25_MODEL:
+        return {
+            "api_base": LUXVID_BASE_URL,
+            "api_key": LUXVID_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "seedance25_videos_async",
         }
     if model_family in ("videos", "videos_pro", "LuxVid_video", "videos_stable_fast"):
         return {
@@ -654,6 +666,8 @@ def build_request_prompt(model_family: str, prompt: str, aspect_ratio: str):
 def get_max_images_for_model(model_family: str):
     if model_family == SUDASHUI_MULTI_IMAGE_MODEL:
         return 9
+    if model_family == SEEDANCE25_MODEL:
+        return 9
     if model_family in ("sd-2-c4", "sd-2-c6"):
         return 4
     if model_family in MEAICC_MODELS:
@@ -684,6 +698,8 @@ def get_allowed_resolutions(model_family: str):
         return ["720p"]
     if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p", SUDASHUI_MULTI_IMAGE_MODEL):
         return ["720p"]
+    if model_family == SEEDANCE25_MODEL:
+        return ["720p"]
     if model_family == "dolo":
         return ["720p"]
     if model_family == "video-v1-15s":
@@ -706,6 +722,8 @@ def get_allowed_resolutions(model_family: str):
 def get_allowed_seconds(model_family: str):
     if model_family == SUDASHUI_MULTI_IMAGE_MODEL:
         return ["10", "15"]
+    if model_family == SEEDANCE25_MODEL:
+        return [str(value) for value in range(4, 30)]
     if model_family in MEAICC_MODELS:
         return ["10", "15"]
     if model_family == "sora-2-pro":
@@ -736,6 +754,7 @@ def get_allowed_aspect_ratios(model_family: str):
         return ["16:9", "9:16", "1:1", "4:3", "3:4"]
     if model_family in (
         "videos_pro",
+        SEEDANCE25_MODEL,
         "LuxVid_video",
         "videos_stable_fast",
         "wy-sd2",
@@ -1009,6 +1028,47 @@ class WebTaskRunner:
             data = response.json()
             if data.get("error"):
                 raise RuntimeError(str(data.get("error")))
+            remote_task_id = data.get("task_id") or data.get("id") or data.get("taskId")
+            if not remote_task_id:
+                raise RuntimeError(f"missing task id: {data}")
+            return remote_task_id
+
+        if request_mode == "seedance25_videos_async":
+            reference_images = [upload_image_to_imgbb(Path(path)) for path in task["image_paths"][:9]]
+            payload = {
+                "model": task["model_id"],
+                "prompt": task["prompt"],
+                "reference_images": reference_images,
+                "reference_videos": [],
+                "reference_audios": [],
+                "duration": int(str(task["seconds"])),
+                "aspect_ratio": task["aspect_ratio"],
+                "resolution": "720p",
+                "generate_audio": True,
+            }
+            headers["Content-Type"] = "application/json"
+            self.log(
+                task["id"],
+                "submit payload => "
+                f"model={payload['model']}, duration={payload['duration']}, "
+                f"aspect_ratio={payload['aspect_ratio']}, resolution=720p, "
+                f"reference_images={len(reference_images)}, generate_audio=true",
+            )
+            response = self.request_with_retry(
+                "post",
+                f"{task['api_base']}/v2/model-center/tasks",
+                headers=headers,
+                json=payload,
+                timeout=120,
+            )
+            if response.status_code >= 400:
+                raise RuntimeError(f"seedance2.5 submit failed {response.status_code}: {response.text}")
+            data = response.json()
+            if data.get("error"):
+                error = data["error"]
+                if isinstance(error, dict):
+                    error = error.get("message") or str(error)
+                raise RuntimeError(str(error))
             remote_task_id = data.get("task_id") or data.get("id") or data.get("taskId")
             if not remote_task_id:
                 raise RuntimeError(f"missing task id: {data}")
@@ -1464,6 +1524,8 @@ class WebTaskRunner:
         while True:
             if request_mode in ("seedance_special_videos_async", "luxvid_videos_async", "zcb_veo_videos_async"):
                 poll_url = f"{task['api_base']}/v1/result/{remote_task_id}"
+            elif request_mode == "seedance25_videos_async":
+                poll_url = f"{task['api_base']}/v2/model-center/tasks/{remote_task_id}"
             elif request_mode == "xs_sora_videos_async":
                 poll_url = f"{task['api_base']}/videos/{remote_task_id}"
             elif request_mode == "ycy_video_generations_async":
@@ -1857,6 +1919,7 @@ def create_task():
             "sora-2-pro",
             "video-v1-15s",
             "dolo",
+            SEEDANCE25_MODEL,
             "xh-sdas-fast-720p",
             "xh-sdas-pro-720p",
             SUDASHUI_MULTI_IMAGE_MODEL,

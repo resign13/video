@@ -53,6 +53,7 @@ bash scripts/server_deploy.sh
 ## 当前保留模型
 
 - LuxVid_video
+- seedance2.5
 - grok-imagine-video-1.5-preview
 - veo3.1-components
 - veo3.1-fast-components
