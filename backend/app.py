@@ -18,6 +18,8 @@ from PIL import Image, ImageOps
 from requests import exceptions as requests_exceptions
 from werkzeug.utils import secure_filename
 
+from task_repository import TaskRepository
+
 
 APP_NAME = "AI Video Studio Web"
 ROOT_DIR = Path(__file__).resolve().parent
@@ -785,6 +787,7 @@ def build_grok_imagine_size_value(aspect_ratio: str):
 def serialize_task(task: dict):
     data = dict(task)
     data.pop("thread", None)
+    data.pop("api_key", None)
     data["download_url"] = f"/api/tasks/{task['id']}/download" if task.get("local_path") else None
     data["image_preview_urls"] = [
         f"/api/tasks/{task['id']}/images/{index}"
@@ -797,14 +800,16 @@ def serialize_task(task: dict):
 class WebTaskRunner:
     task_store: Dict[str, dict]
     lock: threading.Lock
+    repository: TaskRepository
 
     def log(self, task_id: str, message: str):
         with self.lock:
             task = self.task_store.get(task_id)
             if not task:
                 return
-            task["logs"].append(f"[{short_now()}] {message}")
+            task.setdefault("logs", []).append(f"[{short_now()}] {message}")
             task["logs"] = task["logs"][-100:]
+            self.repository.save(task)
 
     def update(self, task_id: str, **kwargs):
         with self.lock:
@@ -812,6 +817,7 @@ class WebTaskRunner:
             if not task:
                 return
             task.update(kwargs)
+            self.repository.save(task)
 
     def build_headers(self, auth_mode: str, api_key: str):
         if auth_mode == "bearer":
@@ -869,7 +875,13 @@ class WebTaskRunner:
                     self.log(task_id, "provider concurrency slot busy; waiting in local queue")
                 generation_lock.acquire()
                 generation_lock_acquired = True
-            self.update(task_id, status="running", status_text="submitting", progress=8)
+            self.update(
+                task_id,
+                status="running",
+                status_text="submitting",
+                progress=8,
+                started_ts=started_at,
+            )
             self.log(task_id, "submitting task")
             remote_task_id = self.submit_task(task)
             self.update(task_id, remote_task_id=remote_task_id, display_id=remote_task_id)
@@ -878,27 +890,64 @@ class WebTaskRunner:
             if generation_lock_acquired:
                 generation_lock.release()
                 generation_lock_acquired = False
-            self.update(task_id, status_text="downloading")
-            local_path = self.download_video(task, remote_url, remote_task_id)
-            duration = round(time.time() - started_at, 1)
-            self.update(
-                task_id,
-                status="completed",
-                progress=100,
-                status_text="completed",
-                remote_url=remote_url,
-                local_path=str(local_path),
-                duration_seconds=duration,
-                completed_ts=time.time(),
-                expires_at=now_text_from_ts(time.time() + FILE_RETENTION_SECONDS),
-            )
-            self.log(task_id, f"completed: {local_path.name}")
+            self.finish_remote_task(task_id, task, remote_task_id, remote_url, started_at)
         except Exception as exc:
             self.update(task_id, status="failed", error=str(exc), status_text="failed")
             self.log(task_id, f"failed: {exc}")
         finally:
             if generation_lock_acquired:
                 generation_lock.release()
+
+    def resume_task(self, task_id: str):
+        with self.lock:
+            task = self.task_store.get(task_id)
+            if not task:
+                return
+            remote_task_id = str(task.get("remote_task_id") or "")
+        if not remote_task_id:
+            return
+
+        started_at = float(task.get("started_ts") or task.get("created_ts") or time.time())
+        try:
+            self.update(
+                task_id,
+                status="running",
+                status_text="resuming remote task",
+                progress=max(8, int(task.get("progress") or 0)),
+            )
+            self.log(task_id, f"resuming remote task after restart: {remote_task_id}")
+            self.complete_remote_task(task_id, task, remote_task_id, started_at)
+        except Exception as exc:
+            self.update(task_id, status="failed", error=str(exc), status_text="failed")
+            self.log(task_id, f"failed after restart recovery: {exc}")
+
+    def complete_remote_task(self, task_id: str, task: dict, remote_task_id: str, started_at: float):
+        remote_url = self.poll_task(task, remote_task_id)
+        self.finish_remote_task(task_id, task, remote_task_id, remote_url, started_at)
+
+    def finish_remote_task(
+        self,
+        task_id: str,
+        task: dict,
+        remote_task_id: str,
+        remote_url: str,
+        started_at: float,
+    ):
+        self.update(task_id, status_text="downloading")
+        local_path = self.download_video(task, remote_url, remote_task_id)
+        duration = round(time.time() - started_at, 1)
+        self.update(
+            task_id,
+            status="completed",
+            progress=100,
+            status_text="completed",
+            remote_url=remote_url,
+            local_path=str(local_path),
+            duration_seconds=duration,
+            completed_ts=time.time(),
+            expires_at=now_text_from_ts(time.time() + FILE_RETENTION_SECONDS),
+        )
+        self.log(task_id, f"completed: {local_path.name}")
 
     def submit_task(self, task: dict):
         request_mode = task["request_mode"]
@@ -1665,9 +1714,19 @@ ensure_dir(OUTPUT_DIR)
 
 app = Flask(__name__)
 CORS(app)
-TASKS: Dict[str, dict] = {}
+TASK_REPOSITORY = TaskRepository(DATA_DIR / "tasks.sqlite3")
+TASKS: Dict[str, dict] = TASK_REPOSITORY.load_all()
+for persisted_task in TASKS.values():
+    persisted_task.pop("thread", None)
+    persisted_task.setdefault("logs", [])
+    persisted_task.setdefault("remote_task_id", "")
+    persisted_task.setdefault("created_ts", time.time())
+    persisted_task.setdefault("created_at", now_text())
+    model_family = persisted_task.get("model_family")
+    if model_family:
+        persisted_task["api_key"] = get_backend_config(model_family)["api_key"]
 TASK_LOCK = threading.Lock()
-RUNNER = WebTaskRunner(TASKS, TASK_LOCK)
+RUNNER = WebTaskRunner(TASKS, TASK_LOCK, TASK_REPOSITORY)
 
 
 def safe_remove_path(path_value):
@@ -1699,6 +1758,8 @@ def cleanup_expired_files_once():
         for task_id in expired_ids:
             TASKS.pop(task_id, None)
 
+    TASK_REPOSITORY.delete(expired_ids)
+
     for root in (OUTPUT_DIR, UPLOAD_DIR):
         if not root.exists():
             continue
@@ -1716,6 +1777,68 @@ def cleanup_loop():
         time.sleep(CLEANUP_INTERVAL_SECONDS)
 
 
+def append_task_log(task: dict, message: str):
+    task.setdefault("logs", []).append(f"[{short_now()}] {message}")
+    task["logs"] = task["logs"][-100:]
+
+
+def start_task_worker(task_id: str, target=None):
+    worker_target = target or RUNNER.run_task
+    thread = threading.Thread(target=worker_target, args=(task_id,), daemon=True)
+    with TASK_LOCK:
+        task = TASKS.get(task_id)
+        if not task:
+            return False
+        existing_thread = task.get("thread")
+        if existing_thread and existing_thread.is_alive():
+            return False
+        task["thread"] = thread
+        TASK_REPOSITORY.save(task)
+    thread.start()
+    return True
+
+
+def recover_persisted_tasks():
+    remote_task_ids = []
+    queued_task_ids = []
+    with TASK_LOCK:
+        for task_id, task in TASKS.items():
+            status = str(task.get("status") or "queued").lower()
+            if status in {"completed", "failed"}:
+                continue
+
+            remote_task_id = str(task.get("remote_task_id") or "")
+            if remote_task_id:
+                task.update(
+                    status="running",
+                    status_text="resuming remote task",
+                    progress=max(8, int(task.get("progress") or 0)),
+                )
+                append_task_log(task, f"service restarted; resuming remote task {remote_task_id}")
+                TASK_REPOSITORY.save(task)
+                remote_task_ids.append(task_id)
+            elif status == "queued":
+                task["status_text"] = "resuming queued task"
+                append_task_log(task, "service restarted before submission; resuming queued task")
+                TASK_REPOSITORY.save(task)
+                queued_task_ids.append(task_id)
+            else:
+                task.update(
+                    status="failed",
+                    status_text="recovery required",
+                    error="service restarted before the remote task id was saved; use rerun to submit safely",
+                )
+                append_task_log(task, "service restarted before remote task id was saved; task was not resubmitted")
+                TASK_REPOSITORY.save(task)
+
+    for task_id in remote_task_ids:
+        start_task_worker(task_id, RUNNER.resume_task)
+    for task_id in queued_task_ids:
+        start_task_worker(task_id)
+
+
+cleanup_expired_files_once()
+recover_persisted_tasks()
 threading.Thread(target=cleanup_loop, daemon=True).start()
 
 
@@ -1854,11 +1977,10 @@ def rerun_task(task_id: str):
         "logs": [f"[{short_now()}] task recreated from {source_copy.get('display_id') or task_id}"],
     }
 
-    thread = threading.Thread(target=RUNNER.run_task, args=(request_id,), daemon=True)
-    task["thread"] = thread
     with TASK_LOCK:
         TASKS[request_id] = task
-    thread.start()
+        TASK_REPOSITORY.save(task)
+    start_task_worker(request_id)
     return jsonify(serialize_task(task)), 202
 
 
@@ -1965,11 +2087,10 @@ def create_task():
         "logs": [f"[{short_now()}] task created"],
     }
 
-    thread = threading.Thread(target=RUNNER.run_task, args=(request_id,), daemon=True)
-    task["thread"] = thread
     with TASK_LOCK:
         TASKS[request_id] = task
-    thread.start()
+        TASK_REPOSITORY.save(task)
+    start_task_worker(request_id)
     return jsonify(serialize_task(task)), 202
 
 
