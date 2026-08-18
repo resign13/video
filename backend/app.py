@@ -110,6 +110,7 @@ PROMPT_RATIO_MODELS = {"seedance2", "jimeng-video-3.5-pro-12s", "sora-2-12s"}
 LOW_RES_ONLY_MODELS = {"videos", "videos_pro", "LuxVid_video", "videos_stable_fast", "grok-imagine-video-1.5-preview"}
 VEO_STABLE_MODELS = {"veo_3_1_pro_stable", "veo_3_1_fast", "veo_3_1_pro"}
 SUDASHUI_MULTI_IMAGE_MODEL = "sdas-xh-sd2.0-933-3-pro-720p"
+SEEDANCE_SPECIAL_V25_MODEL = "sd_2.5_special_v1"
 SEEDANCE25_LEGACY_MODEL = "seedance2.5"
 SEEDANCE25_MODEL_MAP = {
     "seedance2.5c1": "seedance-2.5-c1",
@@ -180,6 +181,7 @@ MODEL_OPTIONS = [
     {"label": "videos", "value": "videos"},
     {"label": "videos_pro", "value": "videos_pro"},
     {"label": "sd_2.0_special_720p", "value": "sd_2.0_special_720p"},
+    {"label": SEEDANCE_SPECIAL_V25_MODEL, "value": SEEDANCE_SPECIAL_V25_MODEL},
     {"label": "sd-2-c1", "value": "sd-2-c1"},
     {"label": "sd-2-c2", "value": "sd-2-c2"},
     {"label": "sd-2-c3", "value": "sd-2-c3"},
@@ -477,6 +479,8 @@ def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
         return model_family
     if model_family == "sd_2.0_special_720p":
         return model_family
+    if model_family == SEEDANCE_SPECIAL_V25_MODEL:
+        return model_family
     if model_family in SEEDANCE25_MODEL_MAP:
         return SEEDANCE25_MODEL_MAP[model_family]
     if model_family == "wy-sd2":
@@ -548,6 +552,13 @@ def get_backend_config(model_family: str):
             "api_key": LUXVID_API_KEY,
             "auth_mode": "bearer",
             "request_mode": "seedance_special_videos_async",
+        }
+    if model_family == SEEDANCE_SPECIAL_V25_MODEL:
+        return {
+            "api_base": LUXVID_BASE_URL,
+            "api_key": LUXVID_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "seedance_model_center_videos_async",
         }
     if model_family in SEEDANCE25_MODEL_MAP:
         return {
@@ -674,6 +685,8 @@ def build_request_prompt(model_family: str, prompt: str, aspect_ratio: str):
 def get_max_images_for_model(model_family: str):
     if model_family == SUDASHUI_MULTI_IMAGE_MODEL:
         return 9
+    if model_family == SEEDANCE_SPECIAL_V25_MODEL:
+        return 30
     if model_family in ("seedance2.5c1", "seedance2.5c2"):
         return 30
     if model_family == SEEDANCE25_LEGACY_MODEL:
@@ -708,6 +721,8 @@ def get_allowed_resolutions(model_family: str):
         return ["720p"]
     if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p", SUDASHUI_MULTI_IMAGE_MODEL):
         return ["720p"]
+    if model_family == SEEDANCE_SPECIAL_V25_MODEL:
+        return ["720p", "1080p"]
     if model_family == "seedance2.5c1":
         return ["720p", "480p"]
     if model_family in ("seedance2.5c2", SEEDANCE25_LEGACY_MODEL):
@@ -734,6 +749,8 @@ def get_allowed_resolutions(model_family: str):
 def get_allowed_seconds(model_family: str):
     if model_family == SUDASHUI_MULTI_IMAGE_MODEL:
         return ["10", "15"]
+    if model_family == SEEDANCE_SPECIAL_V25_MODEL:
+        return [str(value) for value in range(4, 31)]
     if model_family == "seedance2.5c1":
         return [str(value) for value in range(4, 31)]
     if model_family in ("seedance2.5c2", SEEDANCE25_LEGACY_MODEL):
@@ -764,6 +781,8 @@ def get_allowed_seconds(model_family: str):
 def get_allowed_aspect_ratios(model_family: str):
     if model_family == SUDASHUI_MULTI_IMAGE_MODEL:
         return ["16:9", "9:16", "4:3", "3:4", "1:1", "21:9"]
+    if model_family == SEEDANCE_SPECIAL_V25_MODEL:
+        return ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"]
     if model_family in MEAICC_MODELS:
         return ["16:9", "9:16", "1:1", "4:3", "3:4"]
     if model_family in (
@@ -1029,6 +1048,71 @@ class WebTaskRunner:
                 raise RuntimeError(status.split(":", 1)[-1].strip() or "creation failed")
             if data.get("error"):
                 raise RuntimeError(str(data["error"]))
+            remote_task_id = data.get("task_id") or data.get("id") or data.get("taskId")
+            if not remote_task_id:
+                raise RuntimeError(f"missing task id: {data}")
+            return remote_task_id
+
+        if request_mode == "seedance_model_center_videos_async":
+            max_images = get_max_images_for_model(task["model_family"])
+            reference_images = []
+            image_paths = task["image_paths"][:max_images]
+            for image_index, path in enumerate(image_paths, start=1):
+                self.update(
+                    task["id"],
+                    status_text=f"uploading reference {image_index}/{len(image_paths)}",
+                )
+                self.log(task["id"], f"uploading temporary image {image_index}/{len(image_paths)}")
+                image_url = upload_image_to_uguu(Path(path))
+                self.log(task["id"], f"registering asset {image_index}/{len(image_paths)}")
+                asset_id = upload_image_to_seedance_asset(
+                    image_url,
+                    Path(path).name,
+                    task["api_base"],
+                    headers,
+                    requests.request,
+                )
+                reference_images.append(asset_id)
+                self.log(task["id"], f"asset ready {image_index}/{len(image_paths)}")
+
+            payload = {
+                "model": task["model_id"],
+                "prompt": task["prompt"],
+                "reference_images": reference_images,
+                "reference_videos": [],
+                "reference_audios": [],
+                "duration": int(str(task["seconds"])),
+                "aspect_ratio": task["aspect_ratio"],
+                "resolution": task["resolution"],
+                "seed": -1,
+                "generate_audio": True,
+                "tools": [],
+            }
+            headers["Content-Type"] = "application/json"
+            self.log(
+                task["id"],
+                "submit payload => "
+                f"model={payload['model']}, duration={payload['duration']}, "
+                f"aspect_ratio={payload['aspect_ratio']}, resolution={payload['resolution']}, "
+                f"reference_assets={len(reference_images)}, asset_library=true",
+            )
+            response = self.request_with_retry(
+                "post",
+                f"{task['api_base']}/v2/model-center/tasks",
+                headers=headers,
+                json=payload,
+                timeout=120,
+            )
+            if response.status_code >= 400:
+                raise RuntimeError(f"{SEEDANCE_SPECIAL_V25_MODEL} submit failed {response.status_code}: {response.text}")
+            data = response.json()
+            if isinstance(data.get("data"), dict):
+                data = data["data"]
+            if data.get("error"):
+                error = data["error"]
+                if isinstance(error, dict):
+                    error = error.get("message") or str(error)
+                raise RuntimeError(str(error))
             remote_task_id = data.get("task_id") or data.get("id") or data.get("taskId")
             if not remote_task_id:
                 raise RuntimeError(f"missing task id: {data}")
@@ -1589,7 +1673,7 @@ class WebTaskRunner:
         while True:
             if request_mode in ("seedance_special_videos_async", "luxvid_videos_async", "zcb_veo_videos_async"):
                 poll_url = f"{task['api_base']}/v1/result/{remote_task_id}"
-            elif request_mode == "seedance25_videos_async":
+            elif request_mode in ("seedance25_videos_async", "seedance_model_center_videos_async"):
                 poll_url = f"{task['api_base']}/v2/model-center/tasks/{remote_task_id}"
             elif request_mode == "xs_sora_videos_async":
                 poll_url = f"{task['api_base']}/videos/{remote_task_id}"
@@ -2057,6 +2141,7 @@ def create_task():
             "sora-2-pro",
             "video-v1-15s",
             "dolo",
+            SEEDANCE_SPECIAL_V25_MODEL,
             *SEEDANCE25_MODEL_MAP.keys(),
             "xh-sdas-fast-720p",
             "xh-sdas-pro-720p",
