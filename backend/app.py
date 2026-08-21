@@ -56,6 +56,7 @@ GROK_IMAGINE_BASE_URL = env_value("GROK_IMAGINE_BASE_URL", "https://zexitongxue.
 DOLO_BASE_URL = env_value("DOLO_BASE_URL", "https://zexitongxue.com")
 LUXVID_BASE_URL = env_value("LUXVID_BASE_URL", "https://zcbservice.aizfw.cn/kyyReactApiServer")
 SEEDANCE2_ASSET_UPLOAD_PATH = "/asset/seedance2/assetUpload"
+SEEDANCE2_ASSET_DETAIL_PATH = "/asset/seedance2/assetDetail"
 WY_SD2_BASE_URL = env_value("WY_SD2_BASE_URL", "https://api.pro666.top")
 XS_SORA_BASE_URL = env_value("XS_SORA_BASE_URL", "https://api.xs-token.com/v1")
 AICLUB_BASE_URL = env_value("AICLUB_BASE_URL", "https://api.aiclub.cv")
@@ -89,6 +90,8 @@ SUDASHUI_API_KEY = env_value("SUDASHUI_API_KEY", "sk-IHScGlbGWzhRbsBQ5d7fz3R2v0b
 MEAICC_API_KEY = env_value("MEAICC_API_KEY")
 
 POLL_INTERVAL_SECONDS = 5
+SEEDANCE_ASSET_POLL_INTERVAL_SECONDS = 5
+SEEDANCE_ASSET_WAIT_TIMEOUT_SECONDS = 10 * 60
 LONGXIA_POLL_INTERVAL_SECONDS = 120
 MEAICC_POLL_INTERVAL_SECONDS = 20
 MEAICC_RATE_LIMIT_RETRY_SECONDS = 30
@@ -388,6 +391,81 @@ def upload_image_to_seedance_asset(
     if asset_id.startswith(("assetId://", "asset://")):
         return asset_id
     return f"assetId://{asset_id}"
+
+
+def extract_seedance_asset_status(payload):
+    if isinstance(payload, dict):
+        for key in ("status", "state"):
+            value = payload.get(key)
+            if value not in (None, ""):
+                return str(value).strip().upper()
+        for key in ("data", "result", "payload"):
+            status = extract_seedance_asset_status(payload.get(key))
+            if status:
+                return status
+    return ""
+
+
+def extract_seedance_asset_error(payload):
+    if isinstance(payload, dict):
+        for key in ("errorMessage", "error_message", "error"):
+            value = payload.get(key)
+            if isinstance(value, dict):
+                value = value.get("message") or value.get("msg") or str(value)
+            if value not in (None, ""):
+                return str(value)
+        for key in ("data", "result", "payload"):
+            message = extract_seedance_asset_error(payload.get(key))
+            if message:
+                return message
+    return ""
+
+
+def wait_for_seedance_asset_active(
+    asset_id: str,
+    api_base: str,
+    headers: dict,
+    request_fn,
+    status_callback=None,
+    timeout=SEEDANCE_ASSET_WAIT_TIMEOUT_SECONDS,
+    poll_interval=SEEDANCE_ASSET_POLL_INTERVAL_SECONDS,
+):
+    deadline = time.monotonic() + timeout
+    terminal_statuses = {"FAILED", "EXPIRED", "DELETED"}
+    last_status = None
+
+    while True:
+        response = request_fn(
+            "post",
+            f"{api_base}{SEEDANCE2_ASSET_DETAIL_PATH}",
+            headers={**headers, "Content-Type": "application/json"},
+            json={"assetId": asset_id},
+            timeout=60,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict):
+            code = payload.get("code")
+            if code not in (None, 0, "0", 200, "200"):
+                message = payload.get("msg") or payload.get("message") or str(payload)
+                raise RuntimeError(f"seedance asset detail failed code={code}: {message}")
+
+        status = extract_seedance_asset_status(payload)
+        if status != last_status and status_callback:
+            status_callback(status or "UNKNOWN")
+        last_status = status
+
+        if status == "ACTIVE":
+            return asset_id
+        if status in terminal_statuses:
+            message = extract_seedance_asset_error(payload) or "no error details"
+            raise RuntimeError(f"seedance asset {asset_id} is {status}: {message}")
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"seedance asset {asset_id} did not become ACTIVE within {timeout}s "
+                f"(last status: {status or 'UNKNOWN'})"
+            )
+        time.sleep(poll_interval)
 
 
 def guess_mime_type(file_path: Path):
@@ -1070,10 +1148,31 @@ class WebTaskRunner:
                     Path(path).name,
                     task["api_base"],
                     headers,
-                    requests.request,
+                    self.request_with_retry,
                 )
                 reference_images.append(asset_id)
-                self.log(task["id"], f"asset ready {image_index}/{len(image_paths)}")
+                self.log(task["id"], f"asset registered {image_index}/{len(image_paths)}")
+
+            for image_index, asset_id in enumerate(reference_images, start=1):
+                self.update(
+                    task["id"],
+                    status_text=f"waiting for asset {image_index}/{len(reference_images)}",
+                )
+
+                def log_asset_status(status, current_index=image_index):
+                    self.log(
+                        task["id"],
+                        f"asset {current_index}/{len(reference_images)} status: {status}",
+                    )
+
+                wait_for_seedance_asset_active(
+                    asset_id,
+                    task["api_base"],
+                    headers,
+                    self.request_with_retry,
+                    status_callback=log_asset_status,
+                )
+                self.log(task["id"], f"asset active {image_index}/{len(reference_images)}")
 
             payload = {
                 "model": task["model_id"],
