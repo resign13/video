@@ -2137,10 +2137,8 @@ def rerun_task(task_id: str):
             if not src.exists():
                 raise FileNotFoundError(f"source image missing: {src.name}")
             suffix = src.suffix or ".jpg"
-            dst_name = secure_filename(src.name) or f"image_{index}{suffix}"
-            dst = task_upload_dir / dst_name
-            if dst.exists():
-                dst = task_upload_dir / f"image_{index}{suffix}"
+            original_name = secure_filename(src.name) or f"reference{suffix}"
+            dst = task_upload_dir / f"image_{index}_{original_name}"
             shutil.copy2(src, dst)
             image_paths.append(str(dst))
     except Exception as exc:
@@ -2218,10 +2216,10 @@ def create_task():
     ensure_dir(task_upload_dir)
     image_paths: List[str] = []
     for index, file_storage in enumerate(files, start=1):
-        filename = secure_filename(file_storage.filename or f"image_{index}.jpg")
-        if not filename:
-            filename = f"image_{index}.jpg"
-        save_path = task_upload_dir / filename
+        original_name = secure_filename(file_storage.filename or "reference.jpg")
+        if not original_name:
+            original_name = "reference.jpg"
+        save_path = task_upload_dir / f"image_{index}_{original_name}"
         file_storage.save(save_path)
         image_paths.append(str(save_path))
 
