@@ -659,6 +659,13 @@ input[type="file"] {
   background: #262735;
 }
 
+.image-grid-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .remove-image {
   position: absolute;
   top: 5px;

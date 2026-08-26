@@ -14,6 +14,7 @@ const workMode = ref('standard')
 const batchCount = ref(3)
 const rerunningTaskId = ref('')
 const reusingTaskId = ref('')
+const imageSlotsExpanded = ref(false)
 const previewUrlCache = new WeakMap()
 const MAX_IMAGE_UPLOAD_BYTES = 1024 * 1024
 const MAX_IMAGE_DIMENSION = 4096
@@ -39,6 +40,15 @@ const allowedResolutions = computed(() => selectedModel.value?.resolutions || ['
 const maxImages = computed(() => selectedModel.value?.max_images || 1)
 const secondsOptions = computed(() => selectedModel.value?.seconds_options || ['5', '10', '15'])
 const aspectRatios = computed(() => selectedModel.value?.aspect_ratios || ['16:9', '9:16'])
+const visibleImageCount = computed(() => {
+  const max = maxImages.value
+  if (max <= 12) return max
+  if (imageSlotsExpanded.value) return max
+  if (form.images.length <= 12) return 12
+  return Math.min(max, Math.max(15, Math.ceil(form.images.length / 3) * 3))
+})
+const hasHiddenImageSlots = computed(() => visibleImageCount.value < maxImages.value)
+const canCollapseImageSlots = computed(() => imageSlotsExpanded.value && form.images.length <= 12)
 const batchPromptList = computed(() => {
   const lines = form.prompt
     .split('\n')
@@ -58,6 +68,7 @@ const supportsAutoFace = computed(() => form.model_family === 'videos')
 
 watch(selectedModel, (model) => {
   if (!model) return
+  imageSlotsExpanded.value = false
   if (!model.resolutions.includes(form.resolution)) {
     form.resolution = model.resolutions[0]
   }
@@ -352,6 +363,7 @@ function removeImage(index) {
 function clearForm() {
   form.prompt = ''
   form.images = []
+  imageSlotsExpanded.value = false
   if (filesInput.value) {
     filesInput.value.value = ''
   }
@@ -375,6 +387,16 @@ async function loadTasks() {
   const res = await fetch(`${backendBase}/api/tasks`)
   const data = await readJsonResponse(res, '加载任务失败')
   tasks.value = data.tasks || []
+}
+
+function expandImageSlots() {
+  imageSlotsExpanded.value = true
+}
+
+function collapseImageSlots() {
+  if (form.images.length <= 12) {
+    imageSlotsExpanded.value = false
+  }
 }
 
 async function readJsonResponse(response, defaultMessage = '请求失败') {
@@ -650,7 +672,7 @@ onUnmounted(() => {
             @drop.prevent.stop="onImageDrop"
           >
             <div
-              v-for="index in maxImages"
+              v-for="index in visibleImageCount"
               :key="index"
               class="image-slot"
               :class="{ filled: form.images[index - 1] }"
@@ -670,6 +692,15 @@ onUnmounted(() => {
                 <span class="slot-hint">点击上传</span>
               </template>
             </div>
+          </div>
+
+          <div v-if="maxImages > 12" class="image-grid-actions">
+            <button v-if="hasHiddenImageSlots" class="ghost tiny" @click="expandImageSlots">
+              展开更多图片（{{ visibleImageCount + 1 }}-{{ maxImages }}）
+            </button>
+            <button v-if="canCollapseImageSlots" class="ghost tiny" @click="collapseImageSlots">
+              收起图片 13-{{ maxImages }}
+            </button>
           </div>
 
           <input
