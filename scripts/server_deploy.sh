@@ -60,9 +60,13 @@ if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' | grep -
 server {
     listen ${VIDEO_PORT};
     server_name _;
-    client_max_body_size 80m;
+    client_max_body_size 40m;
     root /opt/video/frontend/dist;
     index index.html;
+    location = /index.html {
+        add_header Cache-Control "no-store";
+        try_files \$uri =404;
+    }
     location /api/ {
         proxy_pass http://127.0.0.1:5000/api/;
         proxy_http_version 1.1;

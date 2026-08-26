@@ -15,6 +15,10 @@ const batchCount = ref(3)
 const rerunningTaskId = ref('')
 const reusingTaskId = ref('')
 const previewUrlCache = new WeakMap()
+const MAX_IMAGE_UPLOAD_BYTES = 1024 * 1024
+const MAX_IMAGE_DIMENSION = 4096
+const JPEG_MAX_QUALITY = 0.92
+const JPEG_MIN_QUALITY = 0.35
 
 const form = reactive({
   model_family: 'LuxVid_video',
@@ -98,14 +102,19 @@ function setWorkMode(mode) {
   errorText.value = ''
 }
 
-function onFilesChange(event) {
+async function onFilesChange(event) {
   const list = Array.from(event.target.files || [])
   if (!list.length) return
 
-  appendImageFiles(list, activeImageSlot.value)
-  activeImageSlot.value = null
-  if (filesInput.value) {
-    filesInput.value.value = ''
+  try {
+    await appendImageFiles(list, activeImageSlot.value)
+  } catch (error) {
+    errorText.value = error.message || '图片压缩失败'
+  } finally {
+    activeImageSlot.value = null
+    if (filesInput.value) {
+      filesInput.value.value = ''
+    }
   }
 }
 
@@ -114,27 +123,132 @@ function isImageFile(file) {
     && (file.type?.startsWith('image/') || /\.(png|jpe?g|webp|bmp)$/i.test(file.name || ''))
 }
 
-function appendImageFiles(files, replaceIndex = null) {
+function loadImageForCompression(file) {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file)
+    const image = new Image()
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl)
+      resolve(image)
+    }
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl)
+      reject(new Error(`无法读取图片：${file.name || '未命名图片'}`))
+    }
+    image.src = objectUrl
+  })
+}
+
+function canvasToJpegBlob(canvas, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(blob => {
+      if (blob) {
+        resolve(blob)
+      } else {
+        reject(new Error('浏览器不支持图片压缩'))
+      }
+    }, 'image/jpeg', quality)
+  })
+}
+
+async function compressImageFile(file) {
+  const image = await loadImageForCompression(file)
+  const sourceWidth = image.naturalWidth || image.width
+  const sourceHeight = image.naturalHeight || image.height
+  if (!sourceWidth || !sourceHeight) {
+    throw new Error(`图片尺寸无效：${file.name || '未命名图片'}`)
+  }
+
+  let scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(sourceWidth, sourceHeight))
+  try {
+    for (let pass = 0; pass < 8; pass += 1) {
+      const width = Math.max(1, Math.round(sourceWidth * scale))
+      const height = Math.max(1, Math.round(sourceHeight * scale))
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      const context = canvas.getContext('2d', { alpha: false })
+      if (!context) throw new Error('浏览器无法创建图片压缩画布')
+
+      context.fillStyle = '#ffffff'
+      context.fillRect(0, 0, width, height)
+      context.drawImage(image, 0, 0, width, height)
+
+      const highestQualityBlob = await canvasToJpegBlob(canvas, JPEG_MAX_QUALITY)
+      if (highestQualityBlob.size <= MAX_IMAGE_UPLOAD_BYTES) {
+        return new File(
+          [highestQualityBlob],
+          `${(file.name || 'image').replace(/\.[^.]+$/, '')}.jpg`,
+          { type: 'image/jpeg', lastModified: file.lastModified },
+        )
+      }
+
+      const lowestQualityBlob = await canvasToJpegBlob(canvas, JPEG_MIN_QUALITY)
+      if (lowestQualityBlob.size <= MAX_IMAGE_UPLOAD_BYTES) {
+        let low = JPEG_MIN_QUALITY
+        let high = JPEG_MAX_QUALITY
+        let bestBlob = lowestQualityBlob
+        for (let attempt = 0; attempt < 7; attempt += 1) {
+          const quality = (low + high) / 2
+          const candidate = await canvasToJpegBlob(canvas, quality)
+          if (candidate.size <= MAX_IMAGE_UPLOAD_BYTES) {
+            bestBlob = candidate
+            low = quality
+          } else {
+            high = quality
+          }
+        }
+        return new File(
+          [bestBlob],
+          `${(file.name || 'image').replace(/\.[^.]+$/, '')}.jpg`,
+          { type: 'image/jpeg', lastModified: file.lastModified },
+        )
+      }
+
+      scale *= 0.75
+    }
+  } finally {
+    image.src = ''
+  }
+
+  throw new Error(`图片压缩后仍超过 1 MB：${file.name || '未命名图片'}`)
+}
+
+async function appendImageFiles(files, replaceIndex = null) {
   const imageFiles = Array.from(files || []).filter(isImageFile)
   if (!imageFiles.length) {
     errorText.value = '未找到可上传的图片'
     return
   }
 
+  const limit = replaceIndex !== null && replaceIndex !== undefined
+    ? 1
+    : Math.max(0, maxImages.value - form.images.length)
+  const filesToCompress = imageFiles.slice(0, limit)
+  if (!filesToCompress.length) {
+    errorText.value = `当前模型最多允许 ${maxImages.value} 张参考图`
+    return
+  }
+
+  const compressedFiles = []
+  for (let index = 0; index < filesToCompress.length; index += 1) {
+    errorText.value = `正在压缩图片 ${index + 1}/${filesToCompress.length}...`
+    compressedFiles.push(await compressImageFile(filesToCompress[index]))
+  }
+
   if (replaceIndex !== null && replaceIndex !== undefined) {
     const index = replaceIndex
     const nextImages = [...form.images]
-    nextImages[index] = imageFiles[0]
+    nextImages[index] = compressedFiles[0]
     form.images = nextImages.slice(0, maxImages.value)
   } else {
     const nextImages = [...form.images]
-    const availableCount = Math.max(0, maxImages.value - nextImages.length)
-    for (const file of imageFiles) {
+    for (const file of compressedFiles) {
       if (nextImages.length >= maxImages.value) break
       nextImages.push(file)
     }
     form.images = nextImages
-    if (imageFiles.length > availableCount) {
+    if (imageFiles.length > filesToCompress.length) {
       errorText.value = `当前模型最多允许 ${maxImages.value} 张参考图`
     } else {
       errorText.value = ''
@@ -215,8 +329,12 @@ async function getDroppedFiles(dataTransfer) {
 
 async function onImageDrop(event) {
   activeImageSlot.value = null
-  const files = await getDroppedFiles(event.dataTransfer)
-  appendImageFiles(files)
+  try {
+    const files = await getDroppedFiles(event.dataTransfer)
+    await appendImageFiles(files)
+  } catch (error) {
+    errorText.value = error.message || '图片压缩失败'
+  }
 }
 
 function openImagePicker(index = null) {
@@ -246,7 +364,7 @@ function clearHistory() {
 
 async function loadModels() {
   const res = await fetch(`${backendBase}/api/models`)
-  const data = await res.json()
+  const data = await readJsonResponse(res, '加载模型失败')
   models.value = data.models || []
   if (models.value.length && !models.value.some(item => item.value === form.model_family)) {
     form.model_family = models.value[0].value
@@ -255,8 +373,25 @@ async function loadModels() {
 
 async function loadTasks() {
   const res = await fetch(`${backendBase}/api/tasks`)
-  const data = await res.json()
+  const data = await readJsonResponse(res, '加载任务失败')
   tasks.value = data.tasks || []
+}
+
+async function readJsonResponse(response, defaultMessage = '请求失败') {
+  const text = await response.text()
+  let data = {}
+  try {
+    data = text ? JSON.parse(text) : {}
+  } catch {
+    if (response.status === 413) {
+      throw new Error('图片总大小超过服务器限制，请等待图片压缩完成后再提交')
+    }
+    throw new Error(`${defaultMessage}（服务器返回 HTTP ${response.status}）`)
+  }
+  if (!response.ok) {
+    throw new Error(data.error || data.message || `${defaultMessage}（HTTP ${response.status}）`)
+  }
+  return data
 }
 
 async function createRemoteTask(promptText) {
@@ -277,11 +412,7 @@ async function createRemoteTask(promptText) {
     method: 'POST',
     body: payload,
   })
-  const data = await res.json()
-  if (!res.ok) {
-    throw new Error(data.error || '提交失败')
-  }
-  return data
+  return readJsonResponse(res, '提交失败')
 }
 
 async function submitTask() {
@@ -336,10 +467,7 @@ async function rerunTask(task) {
   errorText.value = ''
   try {
     const res = await fetch(`${backendBase}/api/tasks/${task.id}/rerun`, { method: 'POST' })
-    const data = await res.json()
-    if (!res.ok) {
-      throw new Error(data.error || '重新提交失败')
-    }
+    const data = await readJsonResponse(res, '重新提交失败')
     await loadTasks()
     if (data?.id) {
       selectedTaskId.value = data.id
@@ -407,7 +535,10 @@ async function reuseTaskConfig(task) {
 
     const imageUrls = (task.image_preview_urls || []).slice(0, model.max_images || 0)
     form.images = imageUrls.length
-      ? await Promise.all(imageUrls.map((url, index) => imageUrlToFile(url, index)))
+      ? await Promise.all(imageUrls.map(async (url, index) => {
+        const sourceFile = await imageUrlToFile(url, index)
+        return compressImageFile(sourceFile)
+      }))
       : []
 
     workMode.value = 'standard'

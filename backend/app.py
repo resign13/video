@@ -104,6 +104,8 @@ RETRY_SLEEP_SECONDS = 2
 IMGBB_UPLOAD_RETRIES = 3
 IMGBB_MAX_IMAGE_DIMENSION = 2048
 IMGBB_JPEG_QUALITY = 88
+UPLOAD_IMAGE_MAX_BYTES = 1024 * 1024
+UPLOAD_IMAGE_MIN_QUALITY = 30
 MAX_REFERENCES = 9
 FILE_RETENTION_SECONDS = 5 * 60 * 60
 CLEANUP_INTERVAL_SECONDS = 10 * 60
@@ -254,7 +256,7 @@ def load_file_base64(file_path: Path):
     return base64.b64encode(file_path.read_bytes()).decode("utf-8")
 
 
-def prepare_image_as_jpeg(file_path: Path):
+def prepare_image_as_jpeg(file_path: Path, max_bytes=UPLOAD_IMAGE_MAX_BYTES):
     with Image.open(file_path) as source:
         image = ImageOps.exif_transpose(source)
         image.load()
@@ -265,15 +267,42 @@ def prepare_image_as_jpeg(file_path: Path):
                 (IMGBB_MAX_IMAGE_DIMENSION, IMGBB_MAX_IMAGE_DIMENSION),
                 resample_filter(),
             )
-        buffer = BytesIO()
-        image.save(
-            buffer,
-            format="JPEG",
-            quality=IMGBB_JPEG_QUALITY,
-            optimize=True,
-            progressive=False,
-        )
-    return buffer.getvalue()
+        while True:
+            for quality in range(IMGBB_JPEG_QUALITY, UPLOAD_IMAGE_MIN_QUALITY - 1, -4):
+                buffer = BytesIO()
+                image.save(
+                    buffer,
+                    format="JPEG",
+                    quality=quality,
+                    optimize=True,
+                    progressive=False,
+                )
+                content = buffer.getvalue()
+                if len(content) <= max_bytes:
+                    return content
+
+            width, height = image.size
+            if max(width, height) <= 512:
+                raise RuntimeError(
+                    f"图片压缩后仍超过 {max_bytes / 1024 / 1024:.0f} MB: {file_path.name}"
+                )
+            image = image.resize(
+                (max(1, round(width * 0.75)), max(1, round(height * 0.75))),
+                resample_filter(),
+            )
+
+
+def save_uploaded_image(file_storage, destination: Path):
+    """Normalize an uploaded image before it enters task storage or workers."""
+    source_path = destination.with_name(f".{destination.name}.source")
+    try:
+        file_storage.save(source_path)
+        content = prepare_image_as_jpeg(source_path)
+        normalized_path = destination.with_suffix(".jpg")
+        normalized_path.write_bytes(content)
+        return normalized_path
+    finally:
+        source_path.unlink(missing_ok=True)
 
 
 def prepare_image_for_imgbb(file_path: Path):
@@ -2215,13 +2244,17 @@ def create_task():
     task_upload_dir = UPLOAD_DIR / request_id
     ensure_dir(task_upload_dir)
     image_paths: List[str] = []
-    for index, file_storage in enumerate(files, start=1):
-        original_name = secure_filename(file_storage.filename or "reference.jpg")
-        if not original_name:
-            original_name = "reference.jpg"
-        save_path = task_upload_dir / f"image_{index}_{original_name}"
-        file_storage.save(save_path)
-        image_paths.append(str(save_path))
+    try:
+        for index, file_storage in enumerate(files, start=1):
+            original_name = secure_filename(file_storage.filename or "reference.jpg")
+            if not original_name:
+                original_name = "reference.jpg"
+            save_path = task_upload_dir / f"image_{index}_{original_name}"
+            normalized_path = save_uploaded_image(file_storage, save_path)
+            image_paths.append(str(normalized_path))
+    except (OSError, RuntimeError, ValueError) as exc:
+        safe_remove_path(task_upload_dir)
+        return jsonify({"error": f"图片处理失败：{exc}"}), 400
 
     model_id = build_model_id(model_family, aspect_ratio, resolution)
     backend = get_backend_config(model_family)
