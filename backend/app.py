@@ -585,7 +585,7 @@ def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
     if model_family in ("videos", "videos_pro"):
         return model_family
     if model_family == "sd_2.0_special_720p":
-        return model_family
+        return "sd_2.0_special"
     if model_family == SEEDANCE_SPECIAL_V25_MODEL:
         return model_family
     if model_family in SEEDANCE25_MODEL_MAP:
@@ -658,7 +658,7 @@ def get_backend_config(model_family: str):
             "api_base": LUXVID_BASE_URL,
             "api_key": LUXVID_API_KEY,
             "auth_mode": "bearer",
-            "request_mode": "seedance_special_videos_async",
+            "request_mode": "seedance_model_center_videos_async",
         }
     if model_family == SEEDANCE_SPECIAL_V25_MODEL:
         return {
