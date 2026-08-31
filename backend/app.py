@@ -1262,10 +1262,33 @@ class WebTaskRunner:
                     Path(path).name,
                     task["api_base"],
                     headers,
-                    requests.request,
+                    self.request_with_retry,
                 )
                 reference_images.append(asset_id)
-                self.log(task["id"], f"asset ready {image_index}/{len(image_paths)}")
+
+                self.log(task["id"], f"asset registered {image_index}/{len(image_paths)}")
+
+            for image_index, asset_id in enumerate(reference_images, start=1):
+                self.update(
+                    task["id"],
+                    status_text=f"waiting for asset {image_index}/{len(reference_images)}",
+                )
+
+                def log_asset_status(status, current_index=image_index):
+                    self.log(
+                        task["id"],
+                        f"asset {current_index}/{len(reference_images)} status: {status}",
+                    )
+
+                wait_for_seedance_asset_active(
+                    asset_id,
+                    task["api_base"],
+                    headers,
+                    self.request_with_retry,
+                    status_callback=log_asset_status,
+                )
+                self.log(task["id"], f"asset active {image_index}/{len(reference_images)}")
+
             self.update(task["id"], status_text="submitting")
             content = [{"type": "text", "text": task["prompt"]}]
             content.extend(
