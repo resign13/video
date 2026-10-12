@@ -278,6 +278,30 @@ input[type="file"] {
   resize: vertical;
 }
 
+.reference-media {
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.reference-media summary {
+  cursor: pointer;
+}
+
+.media-field {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.media-field input {
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid #303242;
+  background: #101117;
+  color: #f4f4f7;
+  padding: 8px 10px;
+}
+
 .footer-actions {
   display: grid;
   grid-template-columns: 1fr 1.8fr;

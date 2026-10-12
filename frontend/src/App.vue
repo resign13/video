@@ -30,6 +30,10 @@ const form = reactive({
   images: [],
   api_key: '',
   auto_face: false,
+  reference_videos: '',
+  reference_audios: '',
+  first_image: '',
+  last_image: '',
 })
 
 const selectedModel = computed(() => {
@@ -65,6 +69,9 @@ const selectedTask = computed(() => {
 })
 
 const supportsAutoFace = computed(() => form.model_family === 'videos')
+const minImages = computed(() => selectedModel.value?.min_images ?? (maxImages.value > 0 ? 1 : 0))
+const supportsReferenceMedia = computed(() => Boolean(selectedModel.value?.supports_reference_media))
+const supportsFrameImages = computed(() => Boolean(selectedModel.value?.supports_frame_images))
 
 watch(selectedModel, (model) => {
   if (!model) return
@@ -82,6 +89,14 @@ watch(selectedModel, (model) => {
     form.images = form.images.slice(0, model.max_images)
   }
   form.auto_face = form.model_family === 'videos'
+  if (!model.supports_reference_media) {
+    form.reference_videos = ''
+    form.reference_audios = ''
+  }
+  if (!model.supports_frame_images) {
+    form.first_image = ''
+    form.last_image = ''
+  }
 }, { immediate: true })
 
 watch(tasks, (list) => {
@@ -363,6 +378,10 @@ function removeImage(index) {
 function clearForm() {
   form.prompt = ''
   form.images = []
+  form.reference_videos = ''
+  form.reference_audios = ''
+  form.first_image = ''
+  form.last_image = ''
   imageSlotsExpanded.value = false
   if (filesInput.value) {
     filesInput.value.value = ''
@@ -430,6 +449,14 @@ async function createRemoteTask(promptText) {
     payload.append('api_key', form.api_key.trim())
   }
   form.images.forEach(file => payload.append('images', file, file.name))
+  if (supportsReferenceMedia.value) {
+    payload.append('reference_videos', form.reference_videos.trim())
+    payload.append('reference_audios', form.reference_audios.trim())
+  }
+  if (supportsFrameImages.value) {
+    payload.append('first_image', form.first_image.trim())
+    payload.append('last_image', form.last_image.trim())
+  }
   const res = await fetch(`${backendBase}/api/tasks`, {
     method: 'POST',
     body: payload,
@@ -443,7 +470,7 @@ async function submitTask() {
     errorText.value = '请输入提示词'
     return
   }
-  if (maxImages.value > 0 && !form.images.length) {
+  if (minImages.value > 0 && !form.images.length) {
     errorText.value = '请至少上传 1 张参考图'
     return
   }
@@ -554,6 +581,10 @@ async function reuseTaskConfig(task) {
     form.seconds = model.seconds_options.includes(taskSeconds) ? taskSeconds : model.seconds_options[0]
     form.prompt = task.prompt || ''
     form.auto_face = Boolean(task.auto_face) && task.model_family === 'videos'
+    form.reference_videos = (task.reference_videos || []).join('\n')
+    form.reference_audios = (task.reference_audios || []).join('\n')
+    form.first_image = task.first_image || ''
+    form.last_image = task.last_image || ''
 
     const imageUrls = (task.image_preview_urls || []).slice(0, model.max_images || 0)
     form.images = imageUrls.length
@@ -712,6 +743,30 @@ onUnmounted(() => {
             @change="onFilesChange"
           />
           <button v-if="maxImages > 0" class="ghost upload-btn" @click="openImagePicker()">追加参考图</button>
+          <p v-if="supportsReferenceMedia" class="hint">参考图可选，最多 30 张；不上传图片也可以生成视频。</p>
+
+          <details v-if="supportsReferenceMedia" class="reference-media">
+            <summary>参考视频、音频{{ supportsFrameImages ? '和首尾帧' : '' }}（可选）</summary>
+            <p class="hint">填写公开可访问的文件链接；视频和音频各最多 10 个，每行一个链接。</p>
+            <label class="media-field">
+              参考视频链接
+              <textarea v-model="form.reference_videos" rows="3" placeholder="https://example.com/reference.mp4"></textarea>
+            </label>
+            <label class="media-field">
+              参考音频链接
+              <textarea v-model="form.reference_audios" rows="3" placeholder="https://example.com/reference.mp3"></textarea>
+            </label>
+            <template v-if="supportsFrameImages">
+              <label class="media-field">
+                首帧图片链接
+                <input v-model="form.first_image" type="url" placeholder="https://example.com/first.jpg" />
+              </label>
+              <label class="media-field">
+                尾帧图片链接
+                <input v-model="form.last_image" type="url" placeholder="https://example.com/last.jpg" />
+              </label>
+            </template>
+          </details>
 
           <textarea
             v-model="form.prompt"

@@ -116,6 +116,9 @@ LOW_RES_ONLY_MODELS = {"videos", "videos_pro", "LuxVid_video", "videos_stable_fa
 VEO_STABLE_MODELS = {"veo_3_1_pro_stable", "veo_3_1_fast", "veo_3_1_pro"}
 SUDASHUI_MULTI_IMAGE_MODEL = "sdas-xh-sd2.0-933-3-pro-720p"
 SEEDANCE_SPECIAL_V25_MODEL = "sd_2.5_special_v1"
+KYY_C5_MODEL = "videos_2.5_30_10_10_c5"
+KYY_C3_MODEL = "videos_30_10_10_c3"
+KYY_URL_MODELS = {KYY_C5_MODEL, KYY_C3_MODEL}
 SEEDANCE25_LEGACY_MODEL = "seedance2.5"
 SEEDANCE25_MODEL_MAP = {
     "seedance2.5c1": "seedance-2.5-c1",
@@ -187,6 +190,8 @@ MODEL_OPTIONS = [
     {"label": "videos_pro", "value": "videos_pro"},
     {"label": "sd_2.0_special_720p", "value": "sd_2.0_special_720p"},
     {"label": SEEDANCE_SPECIAL_V25_MODEL, "value": SEEDANCE_SPECIAL_V25_MODEL},
+    {"label": KYY_C5_MODEL, "value": KYY_C5_MODEL},
+    {"label": KYY_C3_MODEL, "value": KYY_C3_MODEL},
     {"label": "sd-2-c1", "value": "sd-2-c1"},
     {"label": "sd-2-c2", "value": "sd-2-c2"},
     {"label": "sd-2-c3", "value": "sd-2-c3"},
@@ -580,6 +585,8 @@ def build_public_task_image_url(task_id: str, image_index: int):
 
 
 def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
+    if model_family in KYY_URL_MODELS:
+        return model_family
     if model_family in MEAICC_MODELS:
         return model_family
     if model_family in ("videos", "videos_pro"):
@@ -646,6 +653,13 @@ def build_size_value(aspect_ratio: str, resolution: str):
 
 
 def get_backend_config(model_family: str):
+    if model_family in KYY_URL_MODELS:
+        return {
+            "api_base": LUXVID_BASE_URL,
+            "api_key": LUXVID_API_KEY,
+            "auth_mode": "bearer",
+            "request_mode": "kyy_model_center_videos_async",
+        }
     if model_family in MEAICC_MODELS:
         return {
             "api_base": MEAICC_BASE_URL,
@@ -790,6 +804,8 @@ def build_request_prompt(model_family: str, prompt: str, aspect_ratio: str):
 
 
 def get_max_images_for_model(model_family: str):
+    if model_family in KYY_URL_MODELS:
+        return 30
     if model_family == SUDASHUI_MULTI_IMAGE_MODEL:
         return 9
     if model_family == SEEDANCE_SPECIAL_V25_MODEL:
@@ -824,6 +840,10 @@ def get_max_images_for_model(model_family: str):
 
 
 def get_allowed_resolutions(model_family: str):
+    if model_family == KYY_C5_MODEL:
+        return ["720p"]
+    if model_family == KYY_C3_MODEL:
+        return ["720p", "480p"]
     if model_family in MEAICC_MODELS:
         return ["720p"]
     if model_family in ("xh-sdas-fast-720p", "xh-sdas-pro-720p", SUDASHUI_MULTI_IMAGE_MODEL):
@@ -854,6 +874,8 @@ def get_allowed_resolutions(model_family: str):
 
 
 def get_allowed_seconds(model_family: str):
+    if model_family in KYY_URL_MODELS:
+        return [str(value) for value in range(5 if model_family == KYY_C5_MODEL else 4, 31)]
     if model_family == SUDASHUI_MULTI_IMAGE_MODEL:
         return ["10", "15"]
     if model_family == SEEDANCE_SPECIAL_V25_MODEL:
@@ -886,6 +908,10 @@ def get_allowed_seconds(model_family: str):
 
 
 def get_allowed_aspect_ratios(model_family: str):
+    if model_family == KYY_C5_MODEL:
+        return ["16:9", "9:16", "1:1", "2:3", "3:2", "3:4", "4:3", "21:9"]
+    if model_family == KYY_C3_MODEL:
+        return ["16:9", "9:16", "1:1"]
     if model_family == SUDASHUI_MULTI_IMAGE_MODEL:
         return ["16:9", "9:16", "4:3", "3:4", "1:1", "21:9"]
     if model_family == SEEDANCE_SPECIAL_V25_MODEL:
@@ -1329,7 +1355,7 @@ class WebTaskRunner:
                 raise RuntimeError(f"missing task id: {data}")
             return remote_task_id
 
-        if request_mode == "seedance25_videos_async":
+        if request_mode in ("seedance25_videos_async", "kyy_model_center_videos_async"):
             max_images = get_max_images_for_model(task["model_family"])
             reference_images = [
                 upload_image_to_imgbb(Path(path))
@@ -1346,13 +1372,23 @@ class WebTaskRunner:
                 "resolution": task["resolution"],
                 "generate_audio": True,
             }
+            if request_mode == "kyy_model_center_videos_async":
+                payload.pop("generate_audio")
+                payload["reference_videos"] = task.get("reference_videos", [])
+                payload["reference_audios"] = task.get("reference_audios", [])
+                if task["model_family"] == KYY_C5_MODEL:
+                    payload["n"] = "1"
+                else:
+                    for field in ("first_image", "last_image"):
+                        if task.get(field):
+                            payload[field] = task[field]
             headers["Content-Type"] = "application/json"
             self.log(
                 task["id"],
                 "submit payload => "
                 f"model={payload['model']}, duration={payload['duration']}, "
                 f"aspect_ratio={payload['aspect_ratio']}, resolution={payload['resolution']}, "
-                f"reference_images={len(reference_images)}, generate_audio=true",
+                f"reference_images={len(reference_images)}",
             )
             response = self.request_with_retry(
                 "post",
@@ -1362,8 +1398,10 @@ class WebTaskRunner:
                 timeout=120,
             )
             if response.status_code >= 400:
-                raise RuntimeError(f"seedance2.5 submit failed {response.status_code}: {response.text}")
+                raise RuntimeError(f"{task['model_id']} submit failed {response.status_code}: {response.text}")
             data = response.json()
+            if isinstance(data.get("data"), dict):
+                data = data["data"]
             if data.get("error"):
                 error = data["error"]
                 if isinstance(error, dict):
@@ -1824,7 +1862,7 @@ class WebTaskRunner:
         while True:
             if request_mode in ("seedance_special_videos_async", "luxvid_videos_async", "zcb_veo_videos_async"):
                 poll_url = f"{task['api_base']}/v1/result/{remote_task_id}"
-            elif request_mode in ("seedance25_videos_async", "seedance_model_center_videos_async"):
+            elif request_mode in ("seedance25_videos_async", "seedance_model_center_videos_async", "kyy_model_center_videos_async"):
                 poll_url = f"{task['api_base']}/v2/model-center/tasks/{remote_task_id}"
             elif request_mode == "xs_sora_videos_async":
                 poll_url = f"{task['api_base']}/videos/{remote_task_id}"
@@ -1866,7 +1904,7 @@ class WebTaskRunner:
             consecutive_http_errors = 0
             response.raise_for_status()
             raw_data = response.json()
-            if request_mode in ("seedance_special_videos_async", "luxvid_videos_async", "zcb_veo_videos_async"):
+            if request_mode in ("seedance_special_videos_async", "luxvid_videos_async", "zcb_veo_videos_async", "kyy_model_center_videos_async"):
                 data = raw_data.get("data", raw_data) if isinstance(raw_data, dict) else {}
             elif request_mode in ("longxia_videos_async", "sudashui_videos_async"):
                 data = raw_data.get("data", raw_data)
@@ -1891,6 +1929,7 @@ class WebTaskRunner:
                     data.get("video_url")
                     or data.get("url")
                     or data.get("result_url")
+                    or data.get("media_url")
                     or data.get("object")
                     or result.get("file_url")
                     or result.get("url")
@@ -1922,6 +1961,8 @@ class WebTaskRunner:
                 return remote_url
             elif status in ("failed", "failure", "error") or status.startswith("failed:"):
                 error_text = data.get("error")
+                if request_mode == "kyy_model_center_videos_async" and not error_text:
+                    error_text = data.get("error_message")
                 if isinstance(error_text, dict):
                     error_text = error_text.get("message") or str(error_text)
                 if not error_text and status.startswith("failed:"):
@@ -2108,6 +2149,9 @@ def models():
                 "label": item["label"],
                 "value": model_family,
                 "max_images": get_max_images_for_model(model_family),
+                "min_images": 0 if model_family in KYY_URL_MODELS else (1 if get_max_images_for_model(model_family) else 0),
+                "supports_reference_media": model_family in KYY_URL_MODELS,
+                "supports_frame_images": model_family == KYY_C3_MODEL,
                 "resolutions": get_allowed_resolutions(model_family),
                 "seconds_options": get_allowed_seconds(model_family),
                 "aspect_ratios": get_allowed_aspect_ratios(model_family),
@@ -2176,7 +2220,7 @@ def rerun_task(task_id: str):
         source_copy = dict(source)
 
     source_images = source_copy.get("image_paths") or []
-    if not source_images:
+    if not source_images and source_copy.get("model_family") not in KYY_URL_MODELS:
         return jsonify({"error": "source task has no images"}), 400
 
     request_id = uuid.uuid4().hex[:10]
@@ -2215,6 +2259,10 @@ def rerun_task(task_id: str):
         "auto_face": bool(source_copy.get("auto_face")),
         "prompt": source_copy.get("prompt", ""),
         "image_paths": image_paths,
+        "reference_videos": source_copy.get("reference_videos", []),
+        "reference_audios": source_copy.get("reference_audios", []),
+        "first_image": source_copy.get("first_image", ""),
+        "last_image": source_copy.get("last_image", ""),
         "size_value": source_copy.get("size_value", ""),
         "api_base": source_copy.get("api_base"),
         "api_key": source_copy.get("api_key"),
@@ -2252,7 +2300,7 @@ def create_task():
         return jsonify({"error": "missing prompt"}), 400
 
     max_images = get_max_images_for_model(model_family)
-    if max_images > 0 and not files:
+    if max_images > 0 and not files and model_family not in KYY_URL_MODELS:
         return jsonify({"error": "at least one reference image is required"}), 400
     if max_images == 0 and files:
         return jsonify({"error": "this model does not accept reference images"}), 400
@@ -2262,6 +2310,21 @@ def create_task():
     allowed_resolutions = get_allowed_resolutions(model_family)
     if resolution not in allowed_resolutions:
         return jsonify({"error": f"resolution must be one of {allowed_resolutions}"}), 400
+
+    reference_media = {}
+    if model_family in KYY_URL_MODELS:
+        if seconds not in get_allowed_seconds(model_family):
+            return jsonify({"error": "视频时长超出当前模型允许范围"}), 400
+        if aspect_ratio not in get_allowed_aspect_ratios(model_family):
+            return jsonify({"error": "当前模型不支持此画幅比例"}), 400
+        for field in ("reference_videos", "reference_audios", "first_image", "last_image"):
+            urls = [line.strip() for line in request.form.get(field, "").splitlines() if line.strip()]
+            limit = 10 if field.startswith("reference_") else (1 if model_family == KYY_C3_MODEL else 0)
+            if len(urls) > limit:
+                return jsonify({"error": f"{field} 最多支持 {limit} 个链接"}), 400
+            if any(urlparse(url).scheme not in ("http", "https") or not urlparse(url).hostname for url in urls):
+                return jsonify({"error": f"{field} 请填写公开可访问的 HTTP/HTTPS 链接"}), 400
+            reference_media[field] = urls if field.startswith("reference_") else (urls[0] if urls else "")
 
     request_id = uuid.uuid4().hex[:10]
     task_upload_dir = UPLOAD_DIR / request_id
@@ -2285,6 +2348,7 @@ def create_task():
         ""
         if model_family in PROMPT_RATIO_MODELS
         or model_family in MEAICC_MODELS
+        or model_family in KYY_URL_MODELS
         or model_family in (
             "videos",
             "videos_pro",
@@ -2330,6 +2394,7 @@ def create_task():
         "auto_face": auto_face if model_family == "videos" else False,
         "prompt": prompt,
         "image_paths": image_paths,
+        **reference_media,
         "size_value": size_value,
         "api_base": backend["api_base"],
         "api_key": backend["api_key"],

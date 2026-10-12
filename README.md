@@ -52,6 +52,14 @@ bash scripts/server_deploy.sh
 
 ## 当前保留模型
 
+客易云模型中心新增：
+- `videos_2.5_30_10_10_c5`：5–30 秒，720p，支持 8 种画幅比例。
+- `videos_30_10_10_c3`：4–30 秒，480p/720p，支持 16:9、9:16、1:1，支持可选首尾帧图片链接。
+
+两个模型复用 `LUXVID_BASE_URL` 和 `LUXVID_API_KEY`，允许纯文本生成或最多 30 张参考图。上传图片复用 ImgBB 图床；可在网页展开可选输入，填写参考视频和音频的公开链接（各最多 10 个）。任务通过 `/v2/model-center/tasks` 提交和查询，完成后自动下载保存视频。
+
+离线验证（不调用付费生成接口）：`python -m unittest discover -s backend/tests -v`。
+
 - LuxVid_video
 - seedance2.5
 - grok-imagine-video-1.5-preview
