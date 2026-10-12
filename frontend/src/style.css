@@ -283,7 +283,12 @@ input[type="file"] {
   font-size: 13px;
 }
 
-.reference-media summary {
+.media-toggle {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  text-align: left;
   cursor: pointer;
 }
 
@@ -300,6 +305,19 @@ input[type="file"] {
   background: #101117;
   color: #f4f4f7;
   padding: 8px 10px;
+}
+
+.media-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.media-file-row span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .footer-actions {

@@ -15,6 +15,7 @@ const batchCount = ref(3)
 const rerunningTaskId = ref('')
 const reusingTaskId = ref('')
 const imageSlotsExpanded = ref(false)
+const referenceMediaExpanded = ref(false)
 const previewUrlCache = new WeakMap()
 const MAX_IMAGE_UPLOAD_BYTES = 1024 * 1024
 const MAX_IMAGE_DIMENSION = 4096
@@ -30,10 +31,10 @@ const form = reactive({
   images: [],
   api_key: '',
   auto_face: false,
-  reference_videos: '',
-  reference_audios: '',
-  first_image: '',
-  last_image: '',
+  reference_videos: [],
+  reference_audios: [],
+  first_image: [],
+  last_image: [],
 })
 
 const selectedModel = computed(() => {
@@ -72,10 +73,19 @@ const supportsAutoFace = computed(() => form.model_family === 'videos')
 const minImages = computed(() => selectedModel.value?.min_images ?? (maxImages.value > 0 ? 1 : 0))
 const supportsReferenceMedia = computed(() => Boolean(selectedModel.value?.supports_reference_media))
 const supportsFrameImages = computed(() => Boolean(selectedModel.value?.supports_frame_images))
+const mediaUploadFields = computed(() => [
+  { key: 'reference_videos', label: '参考视频', accept: '.mp4,.mov,.webm,.m4v', limit: 10, maxMB: 128 },
+  { key: 'reference_audios', label: '参考音频', accept: '.mp3,.wav,.m4a,.aac,.ogg,.flac', limit: 10, maxMB: 32 },
+  ...(supportsFrameImages.value ? [
+    { key: 'first_image', label: '首帧图片', accept: '.png,.jpg,.jpeg,.webp,.bmp', limit: 1, maxMB: 20 },
+    { key: 'last_image', label: '尾帧图片', accept: '.png,.jpg,.jpeg,.webp,.bmp', limit: 1, maxMB: 20 },
+  ] : []),
+])
 
 watch(selectedModel, (model) => {
   if (!model) return
   imageSlotsExpanded.value = false
+  referenceMediaExpanded.value = false
   if (!model.resolutions.includes(form.resolution)) {
     form.resolution = model.resolutions[0]
   }
@@ -90,12 +100,12 @@ watch(selectedModel, (model) => {
   }
   form.auto_face = form.model_family === 'videos'
   if (!model.supports_reference_media) {
-    form.reference_videos = ''
-    form.reference_audios = ''
+    form.reference_videos = []
+    form.reference_audios = []
   }
   if (!model.supports_frame_images) {
-    form.first_image = ''
-    form.last_image = ''
+    form.first_image = []
+    form.last_image = []
   }
 }, { immediate: true })
 
@@ -375,13 +385,43 @@ function removeImage(index) {
   }
 }
 
+async function onMediaFilesChange(event, field) {
+  const input = event.target
+  const files = Array.from(input.files || [])
+  input.value = ''
+  if (!files.length) return
+  errorText.value = ''
+  if ((field.limit > 1 && form[field.key].length + files.length > field.limit) || files.length > field.limit) {
+    errorText.value = `${field.label}最多上传 ${field.limit} 个文件，请先移除部分文件`
+    return
+  }
+  const extensions = field.accept.split(',')
+  if (files.some(file => !extensions.includes(`.${file.name.split('.').pop().toLowerCase()}`))) {
+    errorText.value = `${field.label}文件格式不支持`
+    return
+  }
+  if (files.some(file => !file.size || file.size > field.maxMB * 1024 * 1024)) {
+    errorText.value = `${field.label}单个文件需大于 0 且不超过 ${field.maxMB} MB`
+    return
+  }
+  try {
+    const prepared = ['first_image', 'last_image'].includes(field.key)
+      ? await Promise.all(files.map(compressImageFile))
+      : files
+    form[field.key] = field.limit === 1 ? prepared : [...form[field.key], ...prepared]
+  } catch (error) {
+    errorText.value = error.message || '参考文件处理失败'
+  }
+}
+
 function clearForm() {
   form.prompt = ''
   form.images = []
-  form.reference_videos = ''
-  form.reference_audios = ''
-  form.first_image = ''
-  form.last_image = ''
+  form.reference_videos = []
+  form.reference_audios = []
+  form.first_image = []
+  form.last_image = []
+  referenceMediaExpanded.value = false
   imageSlotsExpanded.value = false
   if (filesInput.value) {
     filesInput.value.value = ''
@@ -425,7 +465,7 @@ async function readJsonResponse(response, defaultMessage = '请求失败') {
     data = text ? JSON.parse(text) : {}
   } catch {
     if (response.status === 413) {
-      throw new Error('图片总大小超过服务器限制，请等待图片压缩完成后再提交')
+      throw new Error('上传文件总大小超过服务器限制，请减少文件数量或压缩后重试')
     }
     throw new Error(`${defaultMessage}（服务器返回 HTTP ${response.status}）`)
   }
@@ -450,12 +490,9 @@ async function createRemoteTask(promptText) {
   }
   form.images.forEach(file => payload.append('images', file, file.name))
   if (supportsReferenceMedia.value) {
-    payload.append('reference_videos', form.reference_videos.trim())
-    payload.append('reference_audios', form.reference_audios.trim())
-  }
-  if (supportsFrameImages.value) {
-    payload.append('first_image', form.first_image.trim())
-    payload.append('last_image', form.last_image.trim())
+    mediaUploadFields.value.forEach(field => {
+      form[field.key].forEach(file => payload.append(field.key, file, file.name))
+    })
   }
   const res = await fetch(`${backendBase}/api/tasks`, {
     method: 'POST',
@@ -476,6 +513,12 @@ async function submitTask() {
   }
   if (selectedModel.value?.needs_api_key && !form.api_key.trim()) {
     errorText.value = '当前模型需要填写 API Key'
+    return
+  }
+  const uploadBytes = [...form.images, ...mediaUploadFields.value.flatMap(field => form[field.key])]
+    .reduce((total, file) => total + file.size, 0)
+  if (uploadBytes > 510 * 1024 * 1024) {
+    errorText.value = '上传文件总大小不能超过 510 MB，请减少文件数量或压缩后重试'
     return
   }
 
@@ -581,10 +624,15 @@ async function reuseTaskConfig(task) {
     form.seconds = model.seconds_options.includes(taskSeconds) ? taskSeconds : model.seconds_options[0]
     form.prompt = task.prompt || ''
     form.auto_face = Boolean(task.auto_face) && task.model_family === 'videos'
-    form.reference_videos = (task.reference_videos || []).join('\n')
-    form.reference_audios = (task.reference_audios || []).join('\n')
-    form.first_image = task.first_image || ''
-    form.last_image = task.last_image || ''
+    for (const field of mediaUploadFields.value) {
+      form[field.key] = await Promise.all((task.media_files?.[field.key] || []).map(async (media) => {
+        const response = await fetch(`${backendBase}${media.url}`)
+        if (!response.ok) throw new Error(`${field.label}文件已过期或无法读取，请重新上传`)
+        const blob = await response.blob()
+        return new File([blob], media.name, { type: blob.type })
+      }))
+    }
+    referenceMediaExpanded.value = false
 
     const imageUrls = (task.image_preview_urls || []).slice(0, model.max_images || 0)
     form.images = imageUrls.length
@@ -745,28 +793,35 @@ onUnmounted(() => {
           <button v-if="maxImages > 0" class="ghost upload-btn" @click="openImagePicker()">追加参考图</button>
           <p v-if="supportsReferenceMedia" class="hint">参考图可选，最多 30 张；不上传图片也可以生成视频。</p>
 
-          <details v-if="supportsReferenceMedia" class="reference-media">
-            <summary>参考视频、音频{{ supportsFrameImages ? '和首尾帧' : '' }}（可选）</summary>
-            <p class="hint">填写公开可访问的文件链接；视频和音频各最多 10 个，每行一个链接。</p>
-            <label class="media-field">
-              参考视频链接
-              <textarea v-model="form.reference_videos" rows="3" placeholder="https://example.com/reference.mp4"></textarea>
-            </label>
-            <label class="media-field">
-              参考音频链接
-              <textarea v-model="form.reference_audios" rows="3" placeholder="https://example.com/reference.mp3"></textarea>
-            </label>
-            <template v-if="supportsFrameImages">
-              <label class="media-field">
-                首帧图片链接
-                <input v-model="form.first_image" type="url" placeholder="https://example.com/first.jpg" />
-              </label>
-              <label class="media-field">
-                尾帧图片链接
-                <input v-model="form.last_image" type="url" placeholder="https://example.com/last.jpg" />
-              </label>
-            </template>
-          </details>
+          <div v-if="supportsReferenceMedia" class="reference-media">
+            <button
+              type="button"
+              class="media-toggle"
+              :aria-expanded="referenceMediaExpanded"
+              aria-controls="reference-media-inputs"
+              @click="referenceMediaExpanded = !referenceMediaExpanded"
+            >
+              {{ referenceMediaExpanded ? '▾' : '▸' }} 参考视频、音频{{ supportsFrameImages ? '和首尾帧' : '' }}（可选）
+            </button>
+            <div v-if="referenceMediaExpanded" id="reference-media-inputs">
+              <p class="hint">选择本地文件；视频和音频各最多 10 个，首尾帧各 1 张。</p>
+              <div v-for="field in mediaUploadFields" :key="field.key" class="media-field">
+                <label :for="`media-${field.key}`">{{ field.label }}（{{ form[field.key].length }}/{{ field.limit }}）</label>
+                <input
+                  :id="`media-${field.key}`"
+                  type="file"
+                  :accept="field.accept"
+                  :multiple="field.limit > 1"
+                  @change="onMediaFilesChange($event, field)"
+                />
+                <span class="hint">单个文件最多 {{ field.maxMB }} MB</span>
+                <div v-for="(file, index) in form[field.key]" :key="`${file.name}-${index}`" class="media-file-row">
+                  <span :title="file.name">{{ file.name }}</span>
+                  <button type="button" class="ghost tiny" :aria-label="`移除${field.label} ${file.name}`" @click="form[field.key].splice(index, 1)">移除</button>
+                </div>
+              </div>
+            </div>
+          </div>
 
           <textarea
             v-model="form.prompt"

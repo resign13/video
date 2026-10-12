@@ -60,7 +60,8 @@ if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' | grep -
 server {
     listen ${VIDEO_PORT};
     server_name _;
-    client_max_body_size 40m;
+    client_max_body_size 512m;
+    client_body_timeout 600s;
     root /opt/video/frontend/dist;
     index index.html;
     location = /index.html {
@@ -75,8 +76,8 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_connect_timeout 180s;
-        proxy_send_timeout 180s;
-        proxy_read_timeout 180s;
+        proxy_send_timeout 600s;
+        proxy_read_timeout 600s;
     }
     location / { try_files \$uri \$uri/ /index.html; }
 }

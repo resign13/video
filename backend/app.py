@@ -9,7 +9,7 @@ from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 from flask import Flask, jsonify, request, send_file
@@ -119,6 +119,12 @@ SEEDANCE_SPECIAL_V25_MODEL = "sd_2.5_special_v1"
 KYY_C5_MODEL = "videos_2.5_30_10_10_c5"
 KYY_C3_MODEL = "videos_30_10_10_c3"
 KYY_URL_MODELS = {KYY_C5_MODEL, KYY_C3_MODEL}
+REFERENCE_MEDIA_FIELDS = {
+    "reference_videos": {"extensions": {".mp4", ".mov", ".webm", ".m4v"}, "max_bytes": 128 * 1024 * 1024, "limit": 10},
+    "reference_audios": {"extensions": {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}, "max_bytes": 32 * 1024 * 1024, "limit": 10},
+    "first_image": {"extensions": {".jpg", ".jpeg", ".png", ".webp", ".bmp"}, "max_bytes": 20 * 1024 * 1024, "limit": 1},
+    "last_image": {"extensions": {".jpg", ".jpeg", ".png", ".webp", ".bmp"}, "max_bytes": 20 * 1024 * 1024, "limit": 1},
+}
 SEEDANCE25_LEGACY_MODEL = "seedance2.5"
 SEEDANCE25_MODEL_MAP = {
     "seedance2.5c1": "seedance-2.5-c1",
@@ -584,6 +590,17 @@ def build_public_task_image_url(task_id: str, image_index: int):
     return f"{PUBLIC_WEB_BASE_URL.rstrip('/')}/api/tasks/{task_id}/reference-images/{image_index}.jpg"
 
 
+def task_media_url(task_id: str, field: str, index: int, path: str):
+    return f"/api/tasks/{task_id}/media/{field}/{index}/{quote(Path(path).name)}"
+
+
+def build_task_media_urls(task: dict, field: str):
+    return [
+        f"{PUBLIC_WEB_BASE_URL.rstrip('/')}{task_media_url(task['id'], field, index, path)}"
+        for index, path in enumerate(task.get("media_paths", {}).get(field, []))
+    ]
+
+
 def build_model_id(model_family: str, aspect_ratio: str, resolution: str):
     if model_family in KYY_URL_MODELS:
         return model_family
@@ -952,6 +969,14 @@ def serialize_task(task: dict):
     data = dict(task)
     data.pop("thread", None)
     data.pop("api_key", None)
+    media_paths = data.pop("media_paths", {})
+    data["media_files"] = {
+        field: [
+            {"name": Path(path).name, "url": task_media_url(task["id"], field, index, path)}
+            for index, path in enumerate(paths)
+        ]
+        for field, paths in media_paths.items()
+    }
     data["download_url"] = f"/api/tasks/{task['id']}/download" if task.get("local_path") else None
     data["image_preview_urls"] = [
         f"/api/tasks/{task['id']}/images/{index}"
@@ -1374,13 +1399,16 @@ class WebTaskRunner:
             }
             if request_mode == "kyy_model_center_videos_async":
                 payload.pop("generate_audio")
-                payload["reference_videos"] = task.get("reference_videos", [])
-                payload["reference_audios"] = task.get("reference_audios", [])
+                payload["reference_videos"] = build_task_media_urls(task, "reference_videos") or task.get("reference_videos", [])
+                payload["reference_audios"] = build_task_media_urls(task, "reference_audios") or task.get("reference_audios", [])
                 if task["model_family"] == KYY_C5_MODEL:
                     payload["n"] = "1"
                 else:
                     for field in ("first_image", "last_image"):
-                        if task.get(field):
+                        urls = build_task_media_urls(task, field)
+                        if urls:
+                            payload[field] = urls[0]
+                        elif task.get(field):
                             payload[field] = task[field]
             headers["Content-Type"] = "application/json"
             self.log(
@@ -2005,6 +2033,7 @@ ensure_dir(UPLOAD_DIR)
 ensure_dir(OUTPUT_DIR)
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024
 CORS(app)
 TASK_REPOSITORY = TaskRepository(DATA_DIR / "tasks.sqlite3")
 TASKS: Dict[str, dict] = TASK_REPOSITORY.load_all()
@@ -2044,7 +2073,9 @@ def cleanup_expired_files_once():
             if task.get("status") in {"completed", "failed"} and (completed_ts or created_ts) < cutoff:
                 expired_ids.append(task_id)
                 safe_remove_path(task.get("local_path"))
-                upload_parent = Path(task.get("image_paths", [""])[0]).parent if task.get("image_paths") else None
+                all_paths = list(task.get("image_paths") or [])
+                all_paths.extend(path for paths in task.get("media_paths", {}).values() for path in paths)
+                upload_parent = Path(all_paths[0]).parent if all_paths else None
                 if upload_parent and str(upload_parent).startswith(str(UPLOAD_DIR)):
                     safe_remove_path(upload_parent)
         for task_id in expired_ids:
@@ -2139,6 +2170,11 @@ def health():
     return jsonify({"ok": True, "name": APP_NAME, "time": now_text()})
 
 
+@app.errorhandler(413)
+def upload_too_large(error):
+    return jsonify({"error": "上传文件总大小不能超过 512 MB，请减少文件数量或压缩后重试"}), 413
+
+
 @app.get("/api/models")
 def models():
     model_data = []
@@ -2152,6 +2188,10 @@ def models():
                 "min_images": 0 if model_family in KYY_URL_MODELS else (1 if get_max_images_for_model(model_family) else 0),
                 "supports_reference_media": model_family in KYY_URL_MODELS,
                 "supports_frame_images": model_family == KYY_C3_MODEL,
+                "media_upload_limits": {
+                    field: {"max_bytes": config["max_bytes"], "limit": config["limit"]}
+                    for field, config in REFERENCE_MEDIA_FIELDS.items()
+                } if model_family in KYY_URL_MODELS else {},
                 "resolutions": get_allowed_resolutions(model_family),
                 "seconds_options": get_allowed_seconds(model_family),
                 "aspect_ratios": get_allowed_aspect_ratios(model_family),
@@ -2211,6 +2251,22 @@ def get_task_image(task_id: str, image_index: int):
     )
 
 
+@app.get("/api/tasks/<task_id>/media/<field>/<int:index>/<filename>")
+def get_task_media(task_id: str, field: str, index: int, filename: str):
+    if field not in REFERENCE_MEDIA_FIELDS:
+        return jsonify({"error": "unsupported media field"}), 404
+    with TASK_LOCK:
+        task = TASKS.get(task_id)
+        paths = list(task.get("media_paths", {}).get(field, [])) if task else []
+    if index < 0 or index >= len(paths):
+        return jsonify({"error": "media not found"}), 404
+    path = Path(paths[index])
+    if path.name != filename or not path.is_file():
+        return jsonify({"error": "media file missing"}), 404
+    # Conditional responses support byte ranges used when reading video/audio.
+    return send_file(path, conditional=True, download_name=path.name)
+
+
 @app.post("/api/tasks/<task_id>/rerun")
 def rerun_task(task_id: str):
     with TASK_LOCK:
@@ -2227,6 +2283,7 @@ def rerun_task(task_id: str):
     task_upload_dir = UPLOAD_DIR / request_id
     ensure_dir(task_upload_dir)
     image_paths: List[str] = []
+    media_paths = {}
     try:
         for index, image_path in enumerate(source_images, start=1):
             src = Path(image_path)
@@ -2237,6 +2294,15 @@ def rerun_task(task_id: str):
             dst = task_upload_dir / f"image_{index}_{original_name}"
             shutil.copy2(src, dst)
             image_paths.append(str(dst))
+        for field, paths in source_copy.get("media_paths", {}).items():
+            media_paths[field] = []
+            for index, path in enumerate(paths, start=1):
+                src = Path(path)
+                if not src.is_file():
+                    raise FileNotFoundError(f"source media missing: {src.name}")
+                dst = task_upload_dir / f"{field}_{index}_{secure_filename(src.name)}"
+                shutil.copy2(src, dst)
+                media_paths[field].append(str(dst))
     except Exception as exc:
         safe_remove_path(task_upload_dir)
         return jsonify({"error": str(exc)}), 400
@@ -2259,6 +2325,7 @@ def rerun_task(task_id: str):
         "auto_face": bool(source_copy.get("auto_face")),
         "prompt": source_copy.get("prompt", ""),
         "image_paths": image_paths,
+        "media_paths": media_paths,
         "reference_videos": source_copy.get("reference_videos", []),
         "reference_audios": source_copy.get("reference_audios", []),
         "first_image": source_copy.get("first_image", ""),
@@ -2311,25 +2378,30 @@ def create_task():
     if resolution not in allowed_resolutions:
         return jsonify({"error": f"resolution must be one of {allowed_resolutions}"}), 400
 
-    reference_media = {}
+    media_uploads = {}
     if model_family in KYY_URL_MODELS:
         if seconds not in get_allowed_seconds(model_family):
             return jsonify({"error": "视频时长超出当前模型允许范围"}), 400
         if aspect_ratio not in get_allowed_aspect_ratios(model_family):
             return jsonify({"error": "当前模型不支持此画幅比例"}), 400
-        for field in ("reference_videos", "reference_audios", "first_image", "last_image"):
-            urls = [line.strip() for line in request.form.get(field, "").splitlines() if line.strip()]
-            limit = 10 if field.startswith("reference_") else (1 if model_family == KYY_C3_MODEL else 0)
-            if len(urls) > limit:
-                return jsonify({"error": f"{field} 最多支持 {limit} 个链接"}), 400
-            if any(urlparse(url).scheme not in ("http", "https") or not urlparse(url).hostname for url in urls):
-                return jsonify({"error": f"{field} 请填写公开可访问的 HTTP/HTTPS 链接"}), 400
-            reference_media[field] = urls if field.startswith("reference_") else (urls[0] if urls else "")
+        for field, config in REFERENCE_MEDIA_FIELDS.items():
+            uploads = [file for file in request.files.getlist(field) if file.filename]
+            limit = config["limit"] if field.startswith("reference_") or model_family == KYY_C3_MODEL else 0
+            if request.form.get(field, "").strip():
+                return jsonify({"error": "请上传本地参考文件"}), 400
+            if len(uploads) > limit:
+                return jsonify({"error": f"{field} 最多支持 {limit} 个文件"}), 400
+            if any(Path(file.filename).suffix.lower() not in config["extensions"] for file in uploads):
+                return jsonify({"error": f"{field} 文件格式不支持"}), 400
+            media_uploads[field] = uploads
+    elif any(request.files.getlist(field) for field in REFERENCE_MEDIA_FIELDS):
+        return jsonify({"error": "当前模型不支持参考视频、音频或首尾帧文件"}), 400
 
     request_id = uuid.uuid4().hex[:10]
     task_upload_dir = UPLOAD_DIR / request_id
     ensure_dir(task_upload_dir)
     image_paths: List[str] = []
+    media_paths = {}
     try:
         for index, file_storage in enumerate(files, start=1):
             original_name = secure_filename(file_storage.filename or "reference.jpg")
@@ -2338,9 +2410,27 @@ def create_task():
             save_path = task_upload_dir / f"image_{index}_{original_name}"
             normalized_path = save_uploaded_image(file_storage, save_path)
             image_paths.append(str(normalized_path))
+        for field, uploads in media_uploads.items():
+            media_paths[field] = []
+            for index, file_storage in enumerate(uploads, start=1):
+                original_name = secure_filename(file_storage.filename)
+                save_path = task_upload_dir / f"{field}_{index}_{original_name}"
+                file_storage.save(save_path)
+                size = save_path.stat().st_size
+                max_bytes = REFERENCE_MEDIA_FIELDS[field]["max_bytes"]
+                if size == 0 or size > max_bytes:
+                    raise ValueError(f"{original_name} 文件为空或超过 {max_bytes // 1024 // 1024} MB")
+                if field in ("first_image", "last_image"):
+                    normalized_path = save_path.with_suffix(".jpg")
+                    content = prepare_image_as_jpeg(save_path)
+                    if save_path != normalized_path:
+                        save_path.unlink()
+                    normalized_path.write_bytes(content)
+                    save_path = normalized_path
+                media_paths[field].append(str(save_path))
     except (OSError, RuntimeError, ValueError) as exc:
         safe_remove_path(task_upload_dir)
-        return jsonify({"error": f"图片处理失败：{exc}"}), 400
+        return jsonify({"error": f"参考文件处理失败：{exc}"}), 400
 
     model_id = build_model_id(model_family, aspect_ratio, resolution)
     backend = get_backend_config(model_family)
@@ -2394,7 +2484,7 @@ def create_task():
         "auto_face": auto_face if model_family == "videos" else False,
         "prompt": prompt,
         "image_paths": image_paths,
-        **reference_media,
+        "media_paths": media_paths,
         "size_value": size_value,
         "api_base": backend["api_base"],
         "api_key": backend["api_key"],

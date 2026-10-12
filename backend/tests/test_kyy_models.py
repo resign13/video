@@ -40,6 +40,12 @@ class KyyModelsTest(unittest.TestCase):
             "resolution": "720p", "aspect_ratio": "16:9", **kwargs,
         })
 
+    def frame(self):
+        image = io.BytesIO()
+        Image.new("RGB", (640, 480), "white").save(image, "PNG")
+        image.seek(0)
+        return (image, "frame.png")
+
     def test_capabilities_and_key_reuse(self):
         models = {m["value"]: m for m in self.client.get("/api/models").json["models"]}
         c5 = models[self.module.KYY_C5_MODEL]
@@ -58,26 +64,47 @@ class KyyModelsTest(unittest.TestCase):
 
     def test_text_only_submission_and_rerun_preserve_media(self):
         response = self.create(self.module.KYY_C3_MODEL, seconds="4", resolution="480p",
-                               reference_videos="https://example.com/video.mp4",
-                               reference_audios="https://example.com/audio.mp3",
-                               first_image="https://example.com/first.jpg",
-                               last_image="https://example.com/last.jpg")
+                               reference_videos=(io.BytesIO(b"test video"), "video.mp4"),
+                               reference_audios=(io.BytesIO(b"test audio"), "audio.mp3"),
+                               first_image=self.frame(), last_image=self.frame())
         self.assertEqual(response.status_code, 202, response.json)
         self.assertNotIn("api_key", response.json)
         rerun = self.client.post(f"/api/tasks/{response.json['id']}/rerun")
         self.assertEqual(rerun.status_code, 202, rerun.json)
-        for field in ("reference_videos", "reference_audios", "first_image", "last_image"):
-            self.assertEqual(rerun.json[field], response.json[field])
+        self.assertNotIn("media_paths", response.json)
+        original = self.module.TASKS[response.json["id"]]
+        copied = self.module.TASKS[rerun.json["id"]]
+        persisted = self.module.TASK_REPOSITORY.load_all()[response.json["id"]]
+        self.assertEqual(persisted["media_paths"], original["media_paths"])
+        for field in self.module.REFERENCE_MEDIA_FIELDS:
+            source_path = Path(original["media_paths"][field][0])
+            copied_path = Path(copied["media_paths"][field][0])
+            self.assertNotEqual(source_path, copied_path)
+            self.assertEqual(source_path.read_bytes(), copied_path.read_bytes())
+            resource = self.client.get(response.json["media_files"][field][0]["url"])
+            self.assertEqual(resource.status_code, 200)
+            self.assertEqual(resource.data, source_path.read_bytes())
+            resource.close()
+        media_url = response.json["media_files"]["reference_videos"][0]["url"]
+        resource = self.client.get(media_url, headers={"Range": "bytes=0-3"})
+        self.assertEqual(resource.status_code, 206)
+        self.assertEqual(resource.data, b"test")
+        resource.close()
+        self.assertEqual(self.client.get(media_url.replace("reference_videos", "invalid")).status_code, 404)
+        self.assertEqual(self.client.get(media_url.replace("video.mp4", "other.mp4")).status_code, 404)
 
     def test_invalid_inputs_are_rejected_before_worker(self):
         cases = [
             (self.module.KYY_C5_MODEL, {"seconds": "4"}),
             (self.module.KYY_C5_MODEL, {"resolution": "480p"}),
-            (self.module.KYY_C5_MODEL, {"first_image": "https://example.com/first.jpg"}),
+            (self.module.KYY_C5_MODEL, {"first_image": self.frame()}),
             (self.module.KYY_C3_MODEL, {"aspect_ratio": "2:3"}),
             (self.module.KYY_C3_MODEL, {"seconds": "31"}),
-            (self.module.KYY_C3_MODEL, {"reference_videos": "\n".join(["https://example.com/v.mp4"] * 11)}),
-            (self.module.KYY_C3_MODEL, {"reference_audios": "file:///audio.mp3"}),
+            (self.module.KYY_C3_MODEL, {"reference_videos": [(io.BytesIO(b"video"), f"{i}.mp4") for i in range(11)]}),
+            (self.module.KYY_C3_MODEL, {"reference_audios": (io.BytesIO(b"wrong"), "wrong.exe")}),
+            (self.module.KYY_C3_MODEL, {"reference_audios": "https://example.com/a.mp3"}),
+            (self.module.KYY_C3_MODEL, {"first_image": (io.BytesIO(b"not an image"), "invalid.png")}),
+            (self.module.KYY_C3_MODEL, {"reference_videos": (io.BytesIO(b""), "empty.mp4")}),
         ]
         for model, fields in cases:
             with self.subTest(model=model, fields=fields):
@@ -91,9 +118,9 @@ class KyyModelsTest(unittest.TestCase):
                 image = io.BytesIO()
                 Image.new("RGB", (640, 480), "white").save(image, "JPEG")
                 image.seek(0)
-                frames = {"first_image": "https://example.com/first.jpg", "last_image": "https://example.com/last.jpg"} if model == self.module.KYY_C3_MODEL else {}
+                frames = {"first_image": self.frame(), "last_image": self.frame()} if model == self.module.KYY_C3_MODEL else {}
                 response = self.create(model, aspect_ratio="2:3" if model == self.module.KYY_C5_MODEL else "1:1",
-                                       images=(image, "reference.jpg"), reference_videos="https://example.com/v.mp4", **frames)
+                                       images=(image, "reference.jpg"), reference_videos=(io.BytesIO(b"video"), "v.mp4"), **frames)
                 self.assertEqual(response.status_code, 202, response.json)
                 task = self.module.TASKS[response.json["id"]]
                 submit_response = Mock(status_code=200)
@@ -105,11 +132,12 @@ class KyyModelsTest(unittest.TestCase):
                     self.assertEqual(request.call_args.args[1], self.module.LUXVID_BASE_URL + "/v2/model-center/tasks")
                     self.assertEqual(payload["model"], model)
                     self.assertEqual(payload["reference_images"], ["https://example.com/image.jpg"])
-                    self.assertEqual(payload["reference_videos"], ["https://example.com/v.mp4"])
+                    self.assertEqual(payload["reference_videos"], self.module.build_task_media_urls(task, "reference_videos"))
+                    self.assertTrue(payload["reference_videos"][0].startswith(self.module.PUBLIC_WEB_BASE_URL.rstrip('/') + "/api/tasks/"))
                     self.assertNotIn("generate_audio", payload)
                     self.assertEqual(payload.get("n"), "1" if model == self.module.KYY_C5_MODEL else None)
-                    for field, value in frames.items():
-                        self.assertEqual(payload[field], value)
+                    for field in frames:
+                        self.assertEqual(payload[field], self.module.build_task_media_urls(task, field)[0])
                 for field in ("result_url", "video_url", "media_url"):
                     poll_response = Mock(status_code=200)
                     poll_response.json.return_value = {"data": {"status": "completed", "object": "video", field: "https://example.com/result.mp4"}}
@@ -120,6 +148,16 @@ class KyyModelsTest(unittest.TestCase):
                 with patch.object(self.module.RUNNER, "request_with_retry", return_value=poll_response):
                     with self.assertRaisesRegex(RuntimeError, "Provider rejected input"):
                         self.module.RUNNER.poll_task(task, "mcp_test")
+
+    def test_upload_size_limits(self):
+        with patch.dict(self.module.REFERENCE_MEDIA_FIELDS["reference_videos"], {"max_bytes": 3}):
+            response = self.create(self.module.KYY_C3_MODEL, reference_videos=(io.BytesIO(b"oversized"), "big.mp4"))
+            self.assertEqual(response.status_code, 400)
+        with patch.dict(self.module.app.config, {"MAX_CONTENT_LENGTH": 100}):
+            response = self.create(self.module.KYY_C3_MODEL, reference_videos=(io.BytesIO(b"video"), "v.mp4"))
+            self.assertEqual(response.status_code, 413)
+            self.assertIsNotNone(response.json["error"])
+        self.worker.assert_not_called()
 
 
 if __name__ == "__main__":
