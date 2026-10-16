@@ -132,6 +132,7 @@ SEEDANCE25_MODEL_MAP = {
     SEEDANCE25_LEGACY_MODEL: "seedance-2.5-c3",
 }
 MEAICC_MODELS = {
+    "sd-2.5-c1",
     "sd-2-c1",
     "sd-2-c2",
     "sd-2-c3",
@@ -198,6 +199,7 @@ MODEL_OPTIONS = [
     {"label": SEEDANCE_SPECIAL_V25_MODEL, "value": SEEDANCE_SPECIAL_V25_MODEL},
     {"label": KYY_C5_MODEL, "value": KYY_C5_MODEL},
     {"label": KYY_C3_MODEL, "value": KYY_C3_MODEL},
+    {"label": "sd-2.5-c1", "value": "sd-2.5-c1"},
     {"label": "sd-2-c1", "value": "sd-2-c1"},
     {"label": "sd-2-c2", "value": "sd-2-c2"},
     {"label": "sd-2-c3", "value": "sd-2-c3"},
