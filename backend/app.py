@@ -893,6 +893,8 @@ def get_allowed_resolutions(model_family: str):
 
 
 def get_allowed_seconds(model_family: str):
+    if model_family == "sd-2.5-c1":
+        return ["30"]
     if model_family in KYY_URL_MODELS:
         return [str(value) for value in range(5 if model_family == KYY_C5_MODEL else 4, 31)]
     if model_family == SUDASHUI_MULTI_IMAGE_MODEL:
@@ -1141,6 +1143,8 @@ class WebTaskRunner:
         self.log(task_id, f"completed: {local_path.name}")
 
     def submit_task(self, task: dict):
+        if task["model_family"] == "sd-2.5-c1" and str(task["seconds"]) != "30":
+            raise RuntimeError("sd-2.5-c1 仅支持 30 秒视频")
         request_mode = task["request_mode"]
         headers = self.build_headers(task["auth_mode"], task["api_key"])
 
@@ -2323,7 +2327,7 @@ def rerun_task(task_id: str):
         "model_id": source_copy.get("model_id"),
         "aspect_ratio": source_copy.get("aspect_ratio"),
         "resolution": source_copy.get("resolution"),
-        "seconds": source_copy.get("seconds"),
+        "seconds": "30" if source_copy.get("model_family") == "sd-2.5-c1" else source_copy.get("seconds"),
         "auto_face": bool(source_copy.get("auto_face")),
         "prompt": source_copy.get("prompt", ""),
         "image_paths": image_paths,
@@ -2356,7 +2360,7 @@ def create_task():
     prompt = (request.form.get("prompt") or "").strip()
     aspect_ratio = (request.form.get("aspect_ratio") or "16:9").strip()
     resolution = (request.form.get("resolution") or "720p").strip()
-    seconds = str(request.form.get("seconds") or "5").strip()
+    seconds = str(request.form.get("seconds") or ("30" if model_family == "sd-2.5-c1" else "5")).strip()
     files = request.files.getlist("images")
     manual_api_key = (request.form.get("api_key") or "").strip()
     auto_face = str(request.form.get("auto_face") or "").strip().lower() in ("1", "true", "yes", "on")
@@ -2379,6 +2383,8 @@ def create_task():
     allowed_resolutions = get_allowed_resolutions(model_family)
     if resolution not in allowed_resolutions:
         return jsonify({"error": f"resolution must be one of {allowed_resolutions}"}), 400
+    if model_family == "sd-2.5-c1" and seconds not in get_allowed_seconds(model_family):
+        return jsonify({"error": "sd-2.5-c1 仅支持 30 秒视频"}), 400
 
     media_uploads = {}
     if model_family in KYY_URL_MODELS:

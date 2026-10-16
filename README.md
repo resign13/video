@@ -52,7 +52,7 @@ bash scripts/server_deploy.sh
 
 ## 当前保留模型
 
-`sd-2.5-c1` 使用 MEAICC 渠道（默认 `https://api.meaicc.com`），复用 `MEAICC_API_KEY` 和现有 `/v1/videos` 提交、轮询与并发排队流程。
+`sd-2.5-c1` 仅支持 30 秒视频，使用 MEAICC 渠道（默认 `https://api.meaicc.com`），复用 `MEAICC_API_KEY` 和现有 `/v1/videos` 提交、轮询与并发排队流程。
 
 客易云模型中心新增：
 - `videos_2.5_30_10_10_c5`：5–30 秒，720p，支持 8 种画幅比例。
