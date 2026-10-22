@@ -133,6 +133,9 @@ SEEDANCE25_MODEL_MAP = {
 }
 MEAICC_MODELS = {
     "sd-2.5-c1",
+    "sd-2.5-d1",
+    "sd-2.5-d2",
+    "sd-2.5-d3",
     "sd-2-c1",
     "sd-2-c2",
     "sd-2-c3",
@@ -143,6 +146,8 @@ MEAICC_MODELS = {
     "sd-2-c8",
     "sd-2-c9",
 }
+MEAICC_D_MODELS = {"sd-2.5-d1", "sd-2.5-d2", "sd-2.5-d3"}
+REFERENCE_MEDIA_MODELS = KYY_URL_MODELS | MEAICC_D_MODELS
 MEAICC_GENERATION_LOCK = threading.Lock()
 
 MODEL_MATRIX = {
@@ -200,6 +205,9 @@ MODEL_OPTIONS = [
     {"label": KYY_C5_MODEL, "value": KYY_C5_MODEL},
     {"label": KYY_C3_MODEL, "value": KYY_C3_MODEL},
     {"label": "sd-2.5-c1", "value": "sd-2.5-c1"},
+    {"label": "sd-2.5-d1", "value": "sd-2.5-d1"},
+    {"label": "sd-2.5-d2", "value": "sd-2.5-d2"},
+    {"label": "sd-2.5-d3", "value": "sd-2.5-d3"},
     {"label": "sd-2-c1", "value": "sd-2-c1"},
     {"label": "sd-2-c2", "value": "sd-2-c2"},
     {"label": "sd-2-c3", "value": "sd-2-c3"},
@@ -823,6 +831,8 @@ def build_request_prompt(model_family: str, prompt: str, aspect_ratio: str):
 
 
 def get_max_images_for_model(model_family: str):
+    if model_family in MEAICC_D_MODELS:
+        return 30
     if model_family in KYY_URL_MODELS:
         return 30
     if model_family == SUDASHUI_MULTI_IMAGE_MODEL:
@@ -859,6 +869,8 @@ def get_max_images_for_model(model_family: str):
 
 
 def get_allowed_resolutions(model_family: str):
+    if model_family == "sd-2.5-d2":
+        return ["480p"]
     if model_family == KYY_C5_MODEL:
         return ["720p"]
     if model_family == KYY_C3_MODEL:
@@ -893,6 +905,8 @@ def get_allowed_resolutions(model_family: str):
 
 
 def get_allowed_seconds(model_family: str):
+    if model_family in MEAICC_D_MODELS:
+        return [str(value) for value in range(5, 31)]
     if model_family == "sd-2.5-c1":
         return ["30"]
     if model_family in KYY_URL_MODELS:
@@ -929,6 +943,8 @@ def get_allowed_seconds(model_family: str):
 
 
 def get_allowed_aspect_ratios(model_family: str):
+    if model_family in MEAICC_D_MODELS:
+        return ["16:9", "9:16", "1:1"]
     if model_family == KYY_C5_MODEL:
         return ["16:9", "9:16", "1:1", "2:3", "3:2", "3:4", "4:3", "21:9"]
     if model_family == KYY_C3_MODEL:
@@ -956,6 +972,20 @@ def get_allowed_aspect_ratios(model_family: str):
     if model_family == "sora-2-pro" or model_family in VEO_STABLE_MODELS:
         return ["16:9", "9:16"]
     return ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]
+
+
+def get_media_upload_limits(model_family: str):
+    if model_family not in REFERENCE_MEDIA_MODELS:
+        return {}
+    fields = {}
+    for field, config in REFERENCE_MEDIA_FIELDS.items():
+        limit = config["limit"]
+        if field in ("first_image", "last_image") and model_family != KYY_C3_MODEL and model_family not in MEAICC_D_MODELS:
+            limit = 0
+        if field == "reference_videos" and model_family == "sd-2.5-d1":
+            limit = 0
+        fields[field] = {**config, "limit": limit}
+    return fields
 
 
 def build_grok_imagine_size_value(aspect_ratio: str):
@@ -1156,7 +1186,14 @@ class WebTaskRunner:
                 }
                 for image_index, _ in enumerate(task["image_paths"])
             ]
-            resolution = "720p"
+            if task["model_family"] in MEAICC_D_MODELS:
+                media_types = {"reference_videos": "reference_video", "reference_audios": "reference_voice",
+                               "first_image": "first_frame", "last_image": "last_frame"}
+                for field, config in get_media_upload_limits(task["model_family"]).items():
+                    if config["limit"]:
+                        media.extend({"type": media_types[field], "url": url}
+                                     for url in build_task_media_urls(task, field))
+            resolution = task["resolution"]
             payload = {
                 "model": task["model_id"],
                 "input": {
@@ -2191,13 +2228,13 @@ def models():
                 "label": item["label"],
                 "value": model_family,
                 "max_images": get_max_images_for_model(model_family),
-                "min_images": 0 if model_family in KYY_URL_MODELS else (1 if get_max_images_for_model(model_family) else 0),
-                "supports_reference_media": model_family in KYY_URL_MODELS,
-                "supports_frame_images": model_family == KYY_C3_MODEL,
+                "min_images": 0 if model_family in REFERENCE_MEDIA_MODELS else (1 if get_max_images_for_model(model_family) else 0),
+                "supports_reference_media": model_family in REFERENCE_MEDIA_MODELS,
+                "supports_frame_images": model_family == KYY_C3_MODEL or model_family in MEAICC_D_MODELS,
                 "media_upload_limits": {
                     field: {"max_bytes": config["max_bytes"], "limit": config["limit"]}
-                    for field, config in REFERENCE_MEDIA_FIELDS.items()
-                } if model_family in KYY_URL_MODELS else {},
+                    for field, config in get_media_upload_limits(model_family).items()
+                },
                 "resolutions": get_allowed_resolutions(model_family),
                 "seconds_options": get_allowed_seconds(model_family),
                 "aspect_ratios": get_allowed_aspect_ratios(model_family),
@@ -2282,7 +2319,7 @@ def rerun_task(task_id: str):
         source_copy = dict(source)
 
     source_images = source_copy.get("image_paths") or []
-    if not source_images and source_copy.get("model_family") not in KYY_URL_MODELS:
+    if not source_images and source_copy.get("model_family") not in REFERENCE_MEDIA_MODELS:
         return jsonify({"error": "source task has no images"}), 400
 
     request_id = uuid.uuid4().hex[:10]
@@ -2371,9 +2408,11 @@ def create_task():
         return jsonify({"error": "unsupported model_family"}), 400
     if not prompt:
         return jsonify({"error": "missing prompt"}), 400
+    if model_family == "sd-2.5-d1" and len(prompt) > 15000:
+        return jsonify({"error": "sd-2.5-d1 提示词最多 15000 个字符"}), 400
 
     max_images = get_max_images_for_model(model_family)
-    if max_images > 0 and not files and model_family not in KYY_URL_MODELS:
+    if max_images > 0 and not files and model_family not in REFERENCE_MEDIA_MODELS:
         return jsonify({"error": "at least one reference image is required"}), 400
     if max_images == 0 and files:
         return jsonify({"error": "this model does not accept reference images"}), 400
@@ -2387,14 +2426,14 @@ def create_task():
         return jsonify({"error": "sd-2.5-c1 仅支持 30 秒视频"}), 400
 
     media_uploads = {}
-    if model_family in KYY_URL_MODELS:
+    if model_family in REFERENCE_MEDIA_MODELS:
         if seconds not in get_allowed_seconds(model_family):
             return jsonify({"error": "视频时长超出当前模型允许范围"}), 400
         if aspect_ratio not in get_allowed_aspect_ratios(model_family):
             return jsonify({"error": "当前模型不支持此画幅比例"}), 400
-        for field, config in REFERENCE_MEDIA_FIELDS.items():
+        for field, config in get_media_upload_limits(model_family).items():
             uploads = [file for file in request.files.getlist(field) if file.filename]
-            limit = config["limit"] if field.startswith("reference_") or model_family == KYY_C3_MODEL else 0
+            limit = config["limit"]
             if request.form.get(field, "").strip():
                 return jsonify({"error": "请上传本地参考文件"}), 400
             if len(uploads) > limit:

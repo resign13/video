@@ -52,6 +52,11 @@ bash scripts/server_deploy.sh
 
 ## 当前保留模型
 
+MEAICC 新增 `sd-2.5-d1`、`sd-2.5-d2`、`sd-2.5-d3`，均复用 `MEAICC_API_KEY` 和 `/v1/videos` 流程。
+三者支持 5–30 秒、最多 30 张参考图及最多 10 个参考音频；D2/D3 另外支持最多 10 个参考视频。
+D1/D3 输出 720p，D2 输出 480p，支持 16:9、9:16、1:1；D1 提示词上限为 15000 字符。
+附加素材选择本地文件，默认收起，按 `input.media` 的图片、音频、视频、首尾帧类型提交。
+
 `sd-2.5-c1` 仅支持 30 秒视频，使用 MEAICC 渠道（默认 `https://api.meaicc.com`），复用 `MEAICC_API_KEY` 和现有 `/v1/videos` 提交、轮询与并发排队流程。
 
 客易云模型中心新增：

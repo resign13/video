@@ -80,7 +80,10 @@ const mediaUploadFields = computed(() => [
     { key: 'first_image', label: '首帧图片', accept: '.png,.jpg,.jpeg,.webp,.bmp', limit: 1, maxMB: 20 },
     { key: 'last_image', label: '尾帧图片', accept: '.png,.jpg,.jpeg,.webp,.bmp', limit: 1, maxMB: 20 },
   ] : []),
-])
+].map(field => ({
+  ...field,
+  limit: selectedModel.value?.media_upload_limits?.[field.key]?.limit ?? field.limit,
+})).filter(field => field.limit > 0))
 
 watch(selectedModel, (model) => {
   if (!model) return
@@ -102,6 +105,9 @@ watch(selectedModel, (model) => {
   if (!model.supports_reference_media) {
     form.reference_videos = []
     form.reference_audios = []
+  }
+  if (model.media_upload_limits?.reference_videos?.limit === 0) {
+    form.reference_videos = []
   }
   if (!model.supports_frame_images) {
     form.first_image = []
