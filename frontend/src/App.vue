@@ -35,6 +35,7 @@ const form = reactive({
   reference_audios: [],
   first_image: [],
   last_image: [],
+  model_options: { seed: '-1', generate_audio: true, omni_reference_task_type: 'auto', return_last_frame: false, tools: '[]' },
 })
 
 const selectedModel = computed(() => {
@@ -83,7 +84,13 @@ const mediaUploadFields = computed(() => [
 ].map(field => ({
   ...field,
   limit: selectedModel.value?.media_upload_limits?.[field.key]?.limit ?? field.limit,
+  maxMB: (selectedModel.value?.media_upload_limits?.[field.key]?.max_bytes ?? field.maxMB * 1024 * 1024) / 1024 / 1024,
+  accept: selectedModel.value?.media_upload_limits?.[field.key]?.extensions?.join(',') || field.accept,
 })).filter(field => field.limit > 0))
+
+watch(() => form.model_options.omni_reference_task_type, mode => {
+  if (selectedModel.value?.supports_special_options && mode === 'extend') form.aspect_ratio = 'adaptive'
+})
 
 watch(selectedModel, (model) => {
   if (!model) return
@@ -427,6 +434,7 @@ function clearForm() {
   form.reference_audios = []
   form.first_image = []
   form.last_image = []
+  form.model_options = { seed: '-1', generate_audio: true, omni_reference_task_type: 'auto', return_last_frame: false, tools: '[]' }
   referenceMediaExpanded.value = false
   imageSlotsExpanded.value = false
   if (filesInput.value) {
@@ -488,6 +496,11 @@ async function createRemoteTask(promptText) {
   payload.append('resolution', form.resolution)
   payload.append('seconds', form.seconds)
   payload.append('prompt', promptText)
+  if (selectedModel.value?.supports_special_options) {
+    let tools
+    try { tools = JSON.parse(form.model_options.tools || '[]') } catch { throw new Error('工具配置必须为有效 JSON 数组') }
+    payload.append('model_options', JSON.stringify({ ...form.model_options, tools }))
+  }
   if (supportsAutoFace.value) {
     payload.append('auto_face', form.auto_face ? 'true' : 'false')
   }
@@ -630,6 +643,8 @@ async function reuseTaskConfig(task) {
     form.seconds = model.seconds_options.includes(taskSeconds) ? taskSeconds : model.seconds_options[0]
     form.prompt = task.prompt || ''
     form.auto_face = Boolean(task.auto_face) && task.model_family === 'videos'
+    form.model_options = { seed: '-1', generate_audio: true, omni_reference_task_type: 'auto', return_last_frame: false,
+      ...task.model_options, tools: JSON.stringify(task.model_options?.tools || []) }
     for (const field of mediaUploadFields.value) {
       form[field.key] = await Promise.all((task.media_files?.[field.key] || []).map(async (media) => {
         const response = await fetch(`${backendBase}${media.url}`)
@@ -797,7 +812,7 @@ onUnmounted(() => {
             @change="onFilesChange"
           />
           <button v-if="maxImages > 0" class="ghost upload-btn" @click="openImagePicker()">追加参考图</button>
-          <p v-if="supportsReferenceMedia" class="hint">参考图可选，最多 30 张；不上传图片也可以生成视频。</p>
+          <p v-if="supportsReferenceMedia" class="hint">参考图可选，最多 {{ maxImages }} 张；不上传图片也可以生成视频。</p>
 
           <div v-if="supportsReferenceMedia" class="reference-media">
             <button
@@ -810,7 +825,7 @@ onUnmounted(() => {
               {{ referenceMediaExpanded ? '▾' : '▸' }} 参考视频、音频{{ supportsFrameImages ? '和首尾帧' : '' }}（可选）
             </button>
             <div v-if="referenceMediaExpanded" id="reference-media-inputs">
-              <p class="hint">选择本地文件；视频和音频各最多 10 个，首尾帧各 1 张。</p>
+              <p class="hint">{{ selectedModel?.reference_media_hint || '选择本地文件，数量和大小以各输入框标注为准。' }}</p>
               <div v-for="field in mediaUploadFields" :key="field.key" class="media-field">
                 <label :for="`media-${field.key}`">{{ field.label }}（{{ form[field.key].length }}/{{ field.limit }}）</label>
                 <input
@@ -828,6 +843,15 @@ onUnmounted(() => {
               </div>
             </div>
           </div>
+
+          <details v-if="selectedModel?.supports_special_options" class="field">
+            <summary>生成参数（可选）</summary>
+            <div class="field"><label>随机种子（-1 为随机）</label><input v-model="form.model_options.seed" type="text" inputmode="numeric" /></div>
+            <div class="field"><label>任务类型</label><select v-model="form.model_options.omni_reference_task_type"><option value="auto">自动判断</option><option value="reference">参考生成</option><option value="extend">视频延长（需参考视频，比例 adaptive）</option></select></div>
+            <label class="face-option"><input v-model="form.model_options.generate_audio" type="checkbox" /> 生成音轨</label>
+            <label class="face-option"><input v-model="form.model_options.return_last_frame" type="checkbox" /> 返回尾帧图片</label>
+            <div class="field"><label>官方工具配置（JSON 数组，可留空）</label><textarea v-model="form.model_options.tools" rows="2" placeholder="[]"></textarea></div>
+          </details>
 
           <textarea
             v-model="form.prompt"
@@ -883,6 +907,7 @@ onUnmounted(() => {
 
             <div class="preview-actions single-action">
               <button class="ghost small" :disabled="!selectedTask?.download_url" @click="openDownload(selectedTask)">下载</button>
+              <a v-if="selectedTask?.last_frame_url" :href="selectedTask.last_frame_url" target="_blank" rel="noopener noreferrer">查看尾帧图片</a>
             </div>
           </div>
         </div>

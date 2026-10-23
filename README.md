@@ -52,6 +52,13 @@ bash scripts/server_deploy.sh
 
 ## 当前保留模型
 
+`sd_2.5_special_v1` 支持文字、多模态参考、首尾帧，以及 seed、generate_audio、
+omni_reference_task_type、return_last_frame、tools。两端提供本地文件选择及折叠的生成参数设置。
+按官方场景限制采用 9 张参考图、3 个视频（mp4/mov，单个最多 50 MB）、3 段音频（wav/mp3，单段最多 15 MB）；
+视频/音频单段 2–15 秒，各自总时长不超过 15 秒，视频 24–60 fps。首尾帧与参考素材不可混用，音频不可单独输入。
+所有素材使用 `model=sd_2.5` 提交素材库并等待 ACTIVE 后才提交任务；返回的尾帧地址在任务详情提供入口。
+参数来源：https://docs.globalaiopc.com/api-reference/model-center/video-gen/sd_2.5_special_v1
+
 MEAICC 新增 `sd-2.5-d1`、`sd-2.5-d2`、`sd-2.5-d3`，均复用 `MEAICC_API_KEY` 和 `/v1/videos` 流程。
 三者支持 5–30 秒、最多 30 张参考图及最多 10 个参考音频；D2/D3 另外支持最多 10 个参考视频。
 D1/D3 输出 720p，D2 输出 480p，支持 16:9、9:16、1:1；D1 提示词上限为 15000 字符。

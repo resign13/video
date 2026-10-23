@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import shutil
 import threading
@@ -147,7 +148,7 @@ MEAICC_MODELS = {
     "sd-2-c9",
 }
 MEAICC_D_MODELS = {"sd-2.5-d1", "sd-2.5-d2", "sd-2.5-d3"}
-REFERENCE_MEDIA_MODELS = KYY_URL_MODELS | MEAICC_D_MODELS
+REFERENCE_MEDIA_MODELS = KYY_URL_MODELS | MEAICC_D_MODELS | {SEEDANCE_SPECIAL_V25_MODEL}
 MEAICC_GENERATION_LOCK = threading.Lock()
 
 MODEL_MATRIX = {
@@ -418,12 +419,17 @@ def upload_image_to_seedance_asset(
     headers: dict,
     request_fn,
     timeout=45,
+    asset_type="Image",
+    model=None,
 ):
+    asset_payload = {"assetType": asset_type, "url": image_url, "name": asset_name}
+    if model:
+        asset_payload["model"] = model
     response = request_fn(
         "post",
         f"{api_base}{SEEDANCE2_ASSET_UPLOAD_PATH}",
         headers={**headers, "Content-Type": "application/json"},
-        json={"assetType": "Image", "url": image_url, "name": asset_name},
+        json=asset_payload,
         timeout=timeout,
     )
     response.raise_for_status()
@@ -838,7 +844,7 @@ def get_max_images_for_model(model_family: str):
     if model_family == SUDASHUI_MULTI_IMAGE_MODEL:
         return 9
     if model_family == SEEDANCE_SPECIAL_V25_MODEL:
-        return 30
+        return 9
     if model_family in ("seedance2.5c1", "seedance2.5c2"):
         return 30
     if model_family == SEEDANCE25_LEGACY_MODEL:
@@ -979,6 +985,11 @@ def get_media_upload_limits(model_family: str):
         return {}
     fields = {}
     for field, config in REFERENCE_MEDIA_FIELDS.items():
+        if model_family == SEEDANCE_SPECIAL_V25_MODEL:
+            extensions = {".mp4", ".mov"} if field == "reference_videos" else ({".wav", ".mp3"} if field == "reference_audios" else config["extensions"])
+            fields[field] = {"extensions": extensions, "limit": 3 if field.startswith("reference_") else 1,
+                             "max_bytes": (50 if field == "reference_videos" else (15 if field == "reference_audios" else 30)) * 1024 * 1024}
+            continue
         limit = config["limit"]
         if field in ("first_image", "last_image") and model_family != KYY_C3_MODEL and model_family not in MEAICC_D_MODELS:
             limit = 0
@@ -986,6 +997,68 @@ def get_media_upload_limits(model_family: str):
             limit = 0
         fields[field] = {**config, "limit": limit}
     return fields
+
+
+def parse_seedance_special_options(raw):
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError as exc:
+            raise ValueError("高级参数必须为有效 JSON") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("高级参数必须为对象")
+    seed = raw.get("seed", -1)
+    if isinstance(seed, bool) or not re_full_integer(str(seed)):
+        raise ValueError("随机种子必须为整数，-1 表示随机")
+    mode = raw.get("omni_reference_task_type", "auto")
+    if mode not in ("auto", "reference", "extend"):
+        raise ValueError("任务类型必须为 auto、reference 或 extend")
+    options = {"seed": int(seed), "omni_reference_task_type": mode}
+    for key, default in (("generate_audio", True), ("return_last_frame", False)):
+        value = raw.get(key, default)
+        if not isinstance(value, bool):
+            raise ValueError(f"{key} 必须为布尔值")
+        options[key] = value
+    tools = raw.get("tools", [])
+    if isinstance(tools, str):
+        try:
+            tools = json.loads(tools)
+        except ValueError as exc:
+            raise ValueError("工具配置必须为有效 JSON 数组") from exc
+    if not isinstance(tools, list):
+        raise ValueError("工具配置必须为 JSON 数组")
+    options["tools"] = tools
+    return options
+
+
+def re_full_integer(value):
+    return value.lstrip("-").isdigit() and value.count("-") <= 1
+
+
+def validate_seedance_special_scene(image_count, media_counts, aspect_ratio, options):
+    if image_count > 9 or any(media_counts.get(field, 0) > 3 for field in ("reference_videos", "reference_audios")):
+        raise ValueError("多模态参考场景最多 9 张参考图、3 个视频、3 段音频")
+    first, last = media_counts.get("first_image", 0), media_counts.get("last_image", 0)
+    references = image_count + media_counts.get("reference_videos", 0) + media_counts.get("reference_audios", 0)
+    if (first or last) and references:
+        raise ValueError("首尾帧与参考图片、视频、音频不可混用，请选择一种场景")
+    if last and not first:
+        raise ValueError("使用尾帧时必须同时上传首帧")
+    if media_counts.get("reference_audios", 0) and not (image_count or media_counts.get("reference_videos", 0)):
+        raise ValueError("参考音频不可单独使用，请同时上传参考图片或视频")
+    if options["omni_reference_task_type"] == "extend":
+        if not media_counts.get("reference_videos", 0) or aspect_ratio != "adaptive":
+            raise ValueError("视频延长必须上传参考视频，并将画幅比例设为 adaptive")
+
+
+def validate_seedance_special_images(paths):
+    for path in paths:
+        if Path(path).stat().st_size >= 30 * 1024 * 1024:
+            raise ValueError("单张图片必须小于 30 MB")
+        with Image.open(path) as image:
+            width, height = image.size
+            if not (0.4 < width / height < 2.5) or not (300 <= width <= 6000 and 300 <= height <= 6000):
+                raise ValueError("图片宽高需为 300–6000 像素，宽高比需大于 0.4 且小于 2.5")
 
 
 def build_grok_imagine_size_value(aspect_ratio: str):
@@ -1173,6 +1246,13 @@ class WebTaskRunner:
         self.log(task_id, f"completed: {local_path.name}")
 
     def submit_task(self, task: dict):
+        if task["model_family"] == SEEDANCE_SPECIAL_V25_MODEL:
+            task["model_options"] = parse_seedance_special_options(task.get("model_options", {}))
+            validate_seedance_special_scene(len(task["image_paths"]),
+                {key: len(value) for key, value in task.get("media_paths", {}).items()},
+                task["aspect_ratio"], task["model_options"])
+            validate_seedance_special_images(task["image_paths"] + [path for field in ("first_image", "last_image")
+                for path in task.get("media_paths", {}).get(field, [])])
         if task["model_family"] == "sd-2.5-c1" and str(task["seconds"]) != "30":
             raise RuntimeError("sd-2.5-c1 仅支持 30 秒视频")
         request_mode = task["request_mode"]
@@ -1272,6 +1352,7 @@ class WebTaskRunner:
                     task["api_base"],
                     headers,
                     self.request_with_retry,
+                    model="sd_2.5" if task["model_family"] == SEEDANCE_SPECIAL_V25_MODEL else None,
                 )
                 reference_images.append(asset_id)
                 self.log(task["id"], f"asset registered {image_index}/{len(image_paths)}")
@@ -1310,6 +1391,23 @@ class WebTaskRunner:
                 "generate_audio": True,
                 "tools": [],
             }
+            if task["model_family"] == SEEDANCE_SPECIAL_V25_MODEL:
+                payload.update(task["model_options"])
+                for field, asset_type in (("reference_videos", "Video"), ("reference_audios", "Audio"),
+                                          ("first_image", "Image"), ("last_image", "Image")):
+                    asset_ids = []
+                    urls = build_task_media_urls(task, field)
+                    paths = task.get("media_paths", {}).get(field, [])
+                    for index, url in enumerate(urls):
+                        self.log(task["id"], f"registering {field} asset {index + 1}/{len(urls)}")
+                        asset_id = upload_image_to_seedance_asset(url, Path(paths[index]).name,
+                            task["api_base"], headers, self.request_with_retry, asset_type=asset_type, model="sd_2.5")
+                        wait_for_seedance_asset_active(asset_id, task["api_base"], headers, self.request_with_retry)
+                        asset_ids.append(asset_id)
+                    if field.startswith("reference_"):
+                        payload[field] = asset_ids
+                    elif asset_ids:
+                        payload[field] = asset_ids[0]
             headers["Content-Type"] = "application/json"
             self.log(
                 task["id"],
@@ -1975,7 +2073,7 @@ class WebTaskRunner:
             consecutive_http_errors = 0
             response.raise_for_status()
             raw_data = response.json()
-            if request_mode in ("seedance_special_videos_async", "luxvid_videos_async", "zcb_veo_videos_async", "kyy_model_center_videos_async"):
+            if request_mode in ("seedance_special_videos_async", "luxvid_videos_async", "zcb_veo_videos_async", "kyy_model_center_videos_async", "seedance_model_center_videos_async"):
                 data = raw_data.get("data", raw_data) if isinstance(raw_data, dict) else {}
             elif request_mode in ("longxia_videos_async", "sudashui_videos_async"):
                 data = raw_data.get("data", raw_data)
@@ -1996,6 +2094,8 @@ class WebTaskRunner:
                 self.update(task["id"], status_text="processing")
             elif status in ("completed", "success", "succeeded", "done"):
                 result = data.get("result") or {}
+                if task["model_family"] == SEEDANCE_SPECIAL_V25_MODEL:
+                    self.update(task["id"], last_frame_url=data.get("last_frame_url") or data.get("lastFrameUrl") or result.get("lastFrameUrl") or "")
                 remote_url = (
                     data.get("video_url")
                     or data.get("url")
@@ -2032,7 +2132,7 @@ class WebTaskRunner:
                 return remote_url
             elif status in ("failed", "failure", "error") or status.startswith("failed:"):
                 error_text = data.get("error")
-                if request_mode == "kyy_model_center_videos_async" and not error_text:
+                if request_mode in ("kyy_model_center_videos_async", "seedance_model_center_videos_async") and not error_text:
                     error_text = data.get("error_message")
                 if isinstance(error_text, dict):
                     error_text = error_text.get("message") or str(error_text)
@@ -2230,9 +2330,11 @@ def models():
                 "max_images": get_max_images_for_model(model_family),
                 "min_images": 0 if model_family in REFERENCE_MEDIA_MODELS else (1 if get_max_images_for_model(model_family) else 0),
                 "supports_reference_media": model_family in REFERENCE_MEDIA_MODELS,
-                "supports_frame_images": model_family == KYY_C3_MODEL or model_family in MEAICC_D_MODELS,
+                "supports_frame_images": model_family == KYY_C3_MODEL or model_family in MEAICC_D_MODELS or model_family == SEEDANCE_SPECIAL_V25_MODEL,
+                "supports_special_options": model_family == SEEDANCE_SPECIAL_V25_MODEL,
+                "reference_media_hint": "多模态参考最多 9 图、3 视频、3 音频；视频/音频单段 2–15 秒，各自总时长不超过 15 秒；视频需 24–60 fps。首尾帧与多模态参考不可混用，音频不能单独输入。" if model_family == SEEDANCE_SPECIAL_V25_MODEL else "",
                 "media_upload_limits": {
-                    field: {"max_bytes": config["max_bytes"], "limit": config["limit"]}
+                    field: {"max_bytes": config["max_bytes"], "limit": config["limit"], "extensions": sorted(config["extensions"])}
                     for field, config in get_media_upload_limits(model_family).items()
                 },
                 "resolutions": get_allowed_resolutions(model_family),
@@ -2366,6 +2468,7 @@ def rerun_task(task_id: str):
         "resolution": source_copy.get("resolution"),
         "seconds": "30" if source_copy.get("model_family") == "sd-2.5-c1" else source_copy.get("seconds"),
         "auto_face": bool(source_copy.get("auto_face")),
+        "model_options": source_copy.get("model_options", {}),
         "prompt": source_copy.get("prompt", ""),
         "image_paths": image_paths,
         "media_paths": media_paths,
@@ -2400,6 +2503,12 @@ def create_task():
     seconds = str(request.form.get("seconds") or ("30" if model_family == "sd-2.5-c1" else "5")).strip()
     files = request.files.getlist("images")
     manual_api_key = (request.form.get("api_key") or "").strip()
+    model_options = {}
+    if model_family == SEEDANCE_SPECIAL_V25_MODEL:
+        try:
+            model_options = parse_seedance_special_options(request.form.get("model_options", "{}"))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
     auto_face = str(request.form.get("auto_face") or "").strip().lower() in ("1", "true", "yes", "on")
 
     if not model_family:
@@ -2443,6 +2552,11 @@ def create_task():
             media_uploads[field] = uploads
     elif any(request.files.getlist(field) for field in REFERENCE_MEDIA_FIELDS):
         return jsonify({"error": "当前模型不支持参考视频、音频或首尾帧文件"}), 400
+    if model_family == SEEDANCE_SPECIAL_V25_MODEL:
+        try:
+            validate_seedance_special_scene(len(files), {key: len(value) for key, value in media_uploads.items()}, aspect_ratio, model_options)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
 
     request_id = uuid.uuid4().hex[:10]
     task_upload_dir = UPLOAD_DIR / request_id
@@ -2464,7 +2578,7 @@ def create_task():
                 save_path = task_upload_dir / f"{field}_{index}_{original_name}"
                 file_storage.save(save_path)
                 size = save_path.stat().st_size
-                max_bytes = REFERENCE_MEDIA_FIELDS[field]["max_bytes"]
+                max_bytes = get_media_upload_limits(model_family)[field]["max_bytes"]
                 if size == 0 or size > max_bytes:
                     raise ValueError(f"{original_name} 文件为空或超过 {max_bytes // 1024 // 1024} MB")
                 if field in ("first_image", "last_image"):
@@ -2475,6 +2589,8 @@ def create_task():
                     normalized_path.write_bytes(content)
                     save_path = normalized_path
                 media_paths[field].append(str(save_path))
+        if model_family == SEEDANCE_SPECIAL_V25_MODEL:
+            validate_seedance_special_images(image_paths + [path for field in ("first_image", "last_image") for path in media_paths.get(field, [])])
     except (OSError, RuntimeError, ValueError) as exc:
         safe_remove_path(task_upload_dir)
         return jsonify({"error": f"参考文件处理失败：{exc}"}), 400
@@ -2529,6 +2645,7 @@ def create_task():
         "resolution": resolution,
         "seconds": seconds,
         "auto_face": auto_face if model_family == "videos" else False,
+        "model_options": model_options,
         "prompt": prompt,
         "image_paths": image_paths,
         "media_paths": media_paths,
