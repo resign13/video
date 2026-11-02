@@ -20,6 +20,7 @@ from requests import exceptions as requests_exceptions
 from werkzeug.utils import secure_filename
 
 from task_repository import TaskRepository
+from usage_records import extract_provider_usage
 
 
 APP_NAME = "AI Video Studio Web"
@@ -1112,6 +1113,9 @@ class WebTaskRunner:
             task = self.task_store.get(task_id)
             if not task:
                 return
+            provider_usage = kwargs.pop("provider_usage", None)
+            if provider_usage is not None:
+                kwargs.update(extract_provider_usage(provider_usage, task.get("request_mode"), task.get("provider_cost_unit")))
             task.update(kwargs)
             self.repository.save(task)
 
@@ -1322,6 +1326,7 @@ class WebTaskRunner:
             if response.status_code >= 400:
                 raise RuntimeError(f"meaicc submit failed {response.status_code}: {response.text}")
             data = response.json()
+            self.update(task["id"], provider_usage=data)
             if isinstance(data.get("data"), dict):
                 data = data["data"]
             status = str(data.get("status") or "")
@@ -1426,6 +1431,7 @@ class WebTaskRunner:
             if response.status_code >= 400:
                 raise RuntimeError(f"{SEEDANCE_SPECIAL_V25_MODEL} submit failed {response.status_code}: {response.text}")
             data = response.json()
+            self.update(task["id"], provider_usage=data)
             if isinstance(data.get("data"), dict):
                 data = data["data"]
             if data.get("error"):
@@ -1514,6 +1520,7 @@ class WebTaskRunner:
             )
             response.raise_for_status()
             data = response.json()
+            self.update(task["id"], provider_usage=data)
             if data.get("error"):
                 raise RuntimeError(str(data.get("error")))
             remote_task_id = data.get("task_id") or data.get("id") or data.get("taskId")
@@ -1569,6 +1576,7 @@ class WebTaskRunner:
             if response.status_code >= 400:
                 raise RuntimeError(f"{task['model_id']} submit failed {response.status_code}: {response.text}")
             data = response.json()
+            self.update(task["id"], provider_usage=data)
             if isinstance(data.get("data"), dict):
                 data = data["data"]
             if data.get("error"):
@@ -1606,6 +1614,7 @@ class WebTaskRunner:
             )
             response.raise_for_status()
             data = response.json()
+            self.update(task["id"], provider_usage=data)
             if data.get("error"):
                 error = data["error"]
                 if isinstance(error, dict):
@@ -1638,6 +1647,7 @@ class WebTaskRunner:
             )
             response.raise_for_status()
             data = response.json()
+            self.update(task["id"], provider_usage=data)
             if data.get("error"):
                 raise RuntimeError(str(data.get("error")))
             return data.get("task_id") or data.get("id") or data.get("taskId")
@@ -1675,6 +1685,7 @@ class WebTaskRunner:
             if response.status_code >= 400:
                 raise RuntimeError(f"???? {response.status_code}: {response.text}")
             data = response.json()
+            self.update(task["id"], provider_usage=data)
             if data.get("error"):
                 error = data.get("error")
                 if isinstance(error, dict):
@@ -1704,6 +1715,7 @@ class WebTaskRunner:
             if response.status_code >= 400:
                 raise RuntimeError(f"YCY submit failed {response.status_code}: {response.text}")
             data = response.json()
+            self.update(task["id"], provider_usage=data)
             if data.get("error"):
                 error = data.get("error")
                 if isinstance(error, dict):
@@ -1737,6 +1749,7 @@ class WebTaskRunner:
             if response.status_code >= 400:
                 raise RuntimeError(f"dolo submit failed {response.status_code}: {response.text}")
             data = response.json()
+            self.update(task["id"], provider_usage=data)
             if data.get("error"):
                 error = data.get("error")
                 if isinstance(error, dict):
@@ -1782,6 +1795,7 @@ class WebTaskRunner:
             if response.status_code >= 400:
                 raise RuntimeError(f"sudashui submit failed {response.status_code}: {response.text}")
             data = response.json()
+            self.update(task["id"], provider_usage=data)
             if data.get("code") and str(data.get("code")).lower() not in ("success", "ok"):
                 raise RuntimeError(data.get("message") or str(data))
             if data.get("error"):
@@ -1834,6 +1848,7 @@ class WebTaskRunner:
             if response.status_code >= 400:
                 raise RuntimeError(f"???? {response.status_code}: {response.text}")
             data = response.json()
+            self.update(task["id"], provider_usage=data)
             if data.get("error"):
                 error = data.get("error")
                 if isinstance(error, dict):
@@ -1864,6 +1879,7 @@ class WebTaskRunner:
             )
             response.raise_for_status()
             data = response.json()
+            self.update(task["id"], provider_usage=data)
             return data.get("task_id") or data.get("id") or data.get("taskId")
 
         if request_mode == "hancat_videos_async":
@@ -1888,6 +1904,7 @@ class WebTaskRunner:
             )
             response.raise_for_status()
             data = response.json()
+            self.update(task["id"], provider_usage=data)
             return data.get("task_id") or data.get("id") or data.get("taskId")
 
         if request_mode == "zcb_veo_videos_async":
@@ -1918,6 +1935,7 @@ class WebTaskRunner:
             )
             response.raise_for_status()
             data = response.json()
+            self.update(task["id"], provider_usage=data)
             if data.get("error"):
                 raise RuntimeError(str(data.get("error")))
             return data.get("task_id") or data.get("id") or data.get("taskId")
@@ -1945,6 +1963,7 @@ class WebTaskRunner:
             )
             response.raise_for_status()
             data = response.json()
+            self.update(task["id"], provider_usage=data)
             return data.get("task_id") or data.get("id") or data.get("taskId")
 
         if request_mode == "longxia_videos_async":
@@ -1972,6 +1991,7 @@ class WebTaskRunner:
             )
             response.raise_for_status()
             data = response.json()
+            self.update(task["id"], provider_usage=data)
             return data.get("id") or data.get("task_id") or data.get("taskId")
 
         if request_mode == "videos_async":
@@ -1998,6 +2018,7 @@ class WebTaskRunner:
                     handle.close()
             response.raise_for_status()
             data = response.json()
+            self.update(task["id"], provider_usage=data)
             return data.get("task_id") or data.get("id") or data.get("taskId")
 
         content = []
@@ -2014,6 +2035,7 @@ class WebTaskRunner:
         )
         response.raise_for_status()
         data = response.json()
+        self.update(task["id"], provider_usage=data)
         return data.get("task_id") or data.get("id") or data.get("taskId")
 
     def poll_task(self, task: dict, remote_task_id: str):
@@ -2083,10 +2105,10 @@ class WebTaskRunner:
             progress = data.get("progress")
 
             if isinstance(progress, (int, float)):
-                self.update(task["id"], progress=max(12, min(95, int(progress))))
+                self.update(task["id"], progress=max(12, min(95, int(progress))), provider_usage=raw_data)
             else:
                 pulse_progress = min(92, pulse_progress + 6)
-                self.update(task["id"], progress=pulse_progress)
+                self.update(task["id"], progress=pulse_progress, provider_usage=raw_data)
 
             if status in ("queued", "pending"):
                 self.update(task["id"], status_text="queued")
@@ -2188,7 +2210,10 @@ for persisted_task in TASKS.values():
     persisted_task.setdefault("created_at", now_text())
     model_family = persisted_task.get("model_family")
     if model_family:
-        persisted_task["api_key"] = get_backend_config(model_family)["api_key"]
+        persisted_task["api_key"] = persisted_task.get("api_key") or get_backend_config(model_family)["api_key"]
+    if persisted_task.get("status") in {"queued", "running"} and not persisted_task.get("usage_tracking"):
+        persisted_task["usage_tracking"] = True
+        persisted_task["usage_key_unknown"] = persisted_task.get("status") == "running" or bool(persisted_task.get("remote_task_id"))
 TASK_LOCK = threading.Lock()
 RUNNER = WebTaskRunner(TASKS, TASK_LOCK, TASK_REPOSITORY)
 
@@ -2225,6 +2250,7 @@ def cleanup_expired_files_once():
             TASKS.pop(task_id, None)
 
     TASK_REPOSITORY.delete(expired_ids)
+    TASK_REPOSITORY.usage.purge()
 
     for root in (OUTPUT_DIR, UPLOAD_DIR):
         if not root.exists():
@@ -2353,6 +2379,23 @@ def list_tasks():
     return jsonify({"tasks": tasks})
 
 
+@app.get("/api/usage")
+def usage_records():
+    try:
+        page = int(request.args.get("page", "1"))
+        page_size = int(request.args.get("page_size", "50"))
+        if not 1 <= page <= 1000000 or not 1 <= page_size <= 100:
+            raise ValueError("分页参数无效")
+        data = TASK_REPOSITORY.usage.list(
+            provider=request.args.get("provider", "kyy").strip(), key=request.args.get("key", "").strip(),
+            start=request.args.get("start", ""), end=request.args.get("end", ""), page=page, page_size=page_size)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    response = jsonify(data)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.get("/api/tasks/<task_id>")
 def get_task(task_id: str):
     with TASK_LOCK:
@@ -2455,6 +2498,7 @@ def rerun_task(task_id: str):
     task = {
         "id": request_id,
         "display_id": f"task_{request_id}",
+        "usage_tracking": True,
         "remote_task_id": "",
         "created_at": now_text(),
         "created_ts": time.time(),
@@ -2632,6 +2676,7 @@ def create_task():
     task = {
         "id": request_id,
         "display_id": f"task_{request_id}",
+        "usage_tracking": True,
         "remote_task_id": "",
         "created_at": now_text(),
         "created_ts": time.time(),

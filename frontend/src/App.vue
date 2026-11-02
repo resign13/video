@@ -1,7 +1,9 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import UsageRecords from './components/UsageRecords.vue'
 
 const backendBase = ''
+const activeView = ref('generation')
 const models = ref([])
 const tasks = ref([])
 const submitting = ref(false)
@@ -696,10 +698,11 @@ onUnmounted(() => {
           <p>多参考图工作台</p>
         </div>
       </div>
-      <div class="topbar-right"></div>
+      <div class="topbar-right"><button :class="activeView === 'generation' ? 'primary small' : 'ghost small'" @click="activeView = 'generation'">视频生成</button><button :class="activeView === 'usage' ? 'primary small' : 'ghost small'" @click="activeView = 'usage'">用量记录</button></div>
     </header>
 
-    <div class="workspace">
+    <UsageRecords v-if="activeView === 'usage'" />
+    <div v-show="activeView === 'generation'" class="workspace">
       <aside class="left-panel">
         <div class="brand-card">
           <div class="brand-icon">◆</div>

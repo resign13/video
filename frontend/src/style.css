@@ -76,7 +76,8 @@ textarea {
 }
 
 .topbar-right {
-  display: none;
+  display: flex;
+  gap: 8px;
 }
 
 .path-box {

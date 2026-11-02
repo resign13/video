@@ -6,6 +6,7 @@ import time
 from contextlib import closing
 from pathlib import Path
 from typing import Dict, Iterable
+from usage_records import UsageRecords
 
 
 class TaskRepository:
@@ -14,6 +15,7 @@ class TaskRepository:
     def __init__(self, database_path):
         self.database_path = Path(database_path)
         self._lock = threading.RLock()
+        self.usage = UsageRecords(self.database_path)
         self._initialize()
 
     def _connect(self):
@@ -39,6 +41,7 @@ class TaskRepository:
                 connection.execute(
                     "CREATE INDEX IF NOT EXISTS idx_tasks_created_ts ON tasks(created_ts DESC)"
                 )
+                self.usage.initialize(connection)
         if os.name != "nt":
             try:
                 self.database_path.chmod(0o600)
@@ -79,16 +82,17 @@ class TaskRepository:
                         """,
                         (task_id, created_ts, time.time(), payload),
                     )
+                    self.usage.save(connection, task)
 
     def load_all(self) -> Dict[str, dict]:
         with self._lock:
             with closing(self._connect()) as connection:
                 rows = connection.execute(
-                    "SELECT id, task_json FROM tasks ORDER BY created_ts DESC"
+                    "SELECT t.id, t.task_json, u.api_key_snapshot FROM tasks t LEFT JOIN generation_usage u ON u.task_id=t.id ORDER BY t.created_ts DESC"
                 ).fetchall()
 
         tasks = {}
-        for task_id, task_json in rows:
+        for task_id, task_json, recorded_key in rows:
             try:
                 task = json.loads(task_json)
             except (TypeError, ValueError):
@@ -97,6 +101,8 @@ class TaskRepository:
                 continue
             task["id"] = str(task.get("id") or task_id)
             task.pop("thread", None)
+            if task.get("usage_tracking") and recorded_key:
+                task["api_key"] = recorded_key
             tasks[task["id"]] = task
         return tasks
 
