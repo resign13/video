@@ -24,6 +24,7 @@ def package():
     shutil.copyfile(package_path, release_dir / filename)
     manifest = {"version": updates.APP_VERSION, "download_url": updates.RELEASE_ORIGIN + "/desktop/releases/" + filename,
                 "size": package_path.stat().st_size, "notes": [
+                    "全新浅色工作台，按步骤组织参数与素材，预览、任务历史和详情分区展示。",
                     "新增 MEAICC mx-h3 与 sd-2.5-d1-720，复用 MEAICC Key。",
                     "新增独立的渠道可用性模块，客易云仅显示视频规格。",
                     "新增软件更新按钮，支持本地替换和自动重启，保留已保存的 Key 与下载路径。"]}
