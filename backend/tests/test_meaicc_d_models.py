@@ -52,7 +52,7 @@ class MeaiccDModelsTest(unittest.TestCase):
         for family in self.module.MEAICC_D_MODELS:
             with self.subTest(model=family):
                 model = models[family]
-                self.assertEqual(model["seconds_options"], [str(i) for i in range(5, 31)])
+                self.assertEqual(model["seconds_options"], [str(i) for i in range(4 if family == "sd-2.5-d1-720" else 5, 31)])
                 self.assertEqual(model["resolutions"], ["480p" if family == "sd-2.5-d2" else "720p"])
                 self.assertEqual((model["min_images"], model["max_images"]), (0, 30))
                 self.assertEqual(model["media_upload_limits"]["reference_videos"]["limit"], 0 if family == "sd-2.5-d1" else 10)
@@ -94,6 +94,43 @@ class MeaiccDModelsTest(unittest.TestCase):
             with self.subTest(model=family, fields=list(changes)):
                 self.assertEqual(self.create(family, **changes).status_code, 400)
         self.module.start_task_worker.assert_not_called()
+
+    def test_mx_h3_capabilities_payload_and_limits(self):
+        model = next(item for item in self.client.get("/api/models").json["models"] if item["value"] == "mx-h3")
+        self.assertEqual(model["resolutions"], ["768p"])
+        self.assertEqual(model["aspect_ratios"], ["9:16"])
+        self.assertEqual(model["seconds_options"], [str(i) for i in range(4, 16)])
+        self.assertEqual((model["min_images"], model["max_images"]), (0, 9))
+        self.assertFalse(model["supports_frame_images"])
+        self.assertEqual(model["media_upload_limits"]["reference_audios"]["limit"], 3)
+        response = self.create("mx-h3", seconds="4", resolution="768p", aspect_ratio="9:16",
+                               images=self.frame(), reference_audios=(io.BytesIO(b"audio"), "a.mp3"))
+        self.assertEqual(response.status_code, 202)
+        task = self.module.TASKS[response.json["id"]]
+        upstream = Mock(status_code=200, headers={})
+        upstream.json.return_value = {"id": "mx-remote"}
+        with patch.object(self.module.RUNNER, "request_with_retry", return_value=upstream) as call:
+            self.assertEqual(self.module.RUNNER.submit_task(task), "mx-remote")
+        payload = call.call_args.kwargs["json"]
+        self.assertEqual(payload["model"], "mx-h3")
+        self.assertEqual(payload["parameters"], {"resolution": "768p", "ratio": "9:16", "duration": 4})
+        self.assertEqual({m["type"] for m in payload["input"]["media"]}, {"reference_image", "reference_voice"})
+        self.assertEqual(call.call_args.kwargs["headers"]["Authorization"], "Bearer test-shared-meaicc-key")
+        self.module.start_task_worker.reset_mock()
+        for changes in ({"aspect_ratio": "16:9"}, {"resolution": "720p"}, {"seconds": "16"},
+                        {"reference_videos": (io.BytesIO(b"video"), "v.mp4")}, {"first_image": self.frame()},
+                        {"reference_audios": [(io.BytesIO(b"audio"), f"{i}.mp3") for i in range(4)]},
+                        {"images": [self.frame() for _ in range(10)]}):
+            with self.subTest(fields=list(changes)):
+                data = {"seconds": "4", "resolution": "768p", "aspect_ratio": "9:16", **changes}
+                self.assertEqual(self.create("mx-h3", **data).status_code, 400)
+        self.module.start_task_worker.assert_not_called()
+
+    def test_d1_720_four_seconds_and_wide_ratios(self):
+        response = self.create("sd-2.5-d1-720", seconds="4", aspect_ratio="21:9")
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(self.module.TASKS[response.json["id"]]["model_id"], "sd-2.5-d1-720")
+        self.assertEqual(self.create("sd-2.5-d1-720", seconds="3").status_code, 400)
 
 
 if __name__ == "__main__":

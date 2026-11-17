@@ -21,6 +21,7 @@ from werkzeug.utils import secure_filename
 
 from task_repository import TaskRepository
 from usage_records import extract_provider_usage
+from channel_availability import SERVICE as AVAILABILITY_SERVICE
 
 
 APP_NAME = "AI Video Studio Web"
@@ -134,8 +135,10 @@ SEEDANCE25_MODEL_MAP = {
     SEEDANCE25_LEGACY_MODEL: "seedance-2.5-c3",
 }
 MEAICC_MODELS = {
+    "mx-h3",
     "sd-2.5-c1",
     "sd-2.5-d1",
+    "sd-2.5-d1-720",
     "sd-2.5-d2",
     "sd-2.5-d3",
     "sd-2-c1",
@@ -148,8 +151,8 @@ MEAICC_MODELS = {
     "sd-2-c8",
     "sd-2-c9",
 }
-MEAICC_D_MODELS = {"sd-2.5-d1", "sd-2.5-d2", "sd-2.5-d3"}
-REFERENCE_MEDIA_MODELS = KYY_URL_MODELS | MEAICC_D_MODELS | {SEEDANCE_SPECIAL_V25_MODEL}
+MEAICC_D_MODELS = {"sd-2.5-d1", "sd-2.5-d1-720", "sd-2.5-d2", "sd-2.5-d3"}
+REFERENCE_MEDIA_MODELS = KYY_URL_MODELS | MEAICC_D_MODELS | {SEEDANCE_SPECIAL_V25_MODEL, "mx-h3"}
 MEAICC_GENERATION_LOCK = threading.Lock()
 
 MODEL_MATRIX = {
@@ -206,8 +209,10 @@ MODEL_OPTIONS = [
     {"label": SEEDANCE_SPECIAL_V25_MODEL, "value": SEEDANCE_SPECIAL_V25_MODEL},
     {"label": KYY_C5_MODEL, "value": KYY_C5_MODEL},
     {"label": KYY_C3_MODEL, "value": KYY_C3_MODEL},
+    {"label": "mx-h3", "value": "mx-h3"},
     {"label": "sd-2.5-c1", "value": "sd-2.5-c1"},
     {"label": "sd-2.5-d1", "value": "sd-2.5-d1"},
+    {"label": "sd-2.5-d1-720", "value": "sd-2.5-d1-720"},
     {"label": "sd-2.5-d2", "value": "sd-2.5-d2"},
     {"label": "sd-2.5-d3", "value": "sd-2.5-d3"},
     {"label": "sd-2-c1", "value": "sd-2-c1"},
@@ -876,6 +881,8 @@ def get_max_images_for_model(model_family: str):
 
 
 def get_allowed_resolutions(model_family: str):
+    if model_family == "mx-h3":
+        return ["768p"]
     if model_family == "sd-2.5-d2":
         return ["480p"]
     if model_family == KYY_C5_MODEL:
@@ -912,6 +919,10 @@ def get_allowed_resolutions(model_family: str):
 
 
 def get_allowed_seconds(model_family: str):
+    if model_family == "mx-h3":
+        return [str(value) for value in range(4, 16)]
+    if model_family == "sd-2.5-d1-720":
+        return [str(value) for value in range(4, 31)]
     if model_family in MEAICC_D_MODELS:
         return [str(value) for value in range(5, 31)]
     if model_family == "sd-2.5-c1":
@@ -950,6 +961,10 @@ def get_allowed_seconds(model_family: str):
 
 
 def get_allowed_aspect_ratios(model_family: str):
+    if model_family == "mx-h3":
+        return ["9:16"]
+    if model_family == "sd-2.5-d1-720":
+        return ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"]
     if model_family in MEAICC_D_MODELS:
         return ["16:9", "9:16", "1:1"]
     if model_family == KYY_C5_MODEL:
@@ -986,6 +1001,9 @@ def get_media_upload_limits(model_family: str):
         return {}
     fields = {}
     for field, config in REFERENCE_MEDIA_FIELDS.items():
+        if model_family == "mx-h3":
+            fields[field] = {**config, "limit": 3 if field == "reference_audios" else 0}
+            continue
         if model_family == SEEDANCE_SPECIAL_V25_MODEL:
             extensions = {".mp4", ".mov"} if field == "reference_videos" else ({".wav", ".mp3"} if field == "reference_audios" else config["extensions"])
             fields[field] = {"extensions": extensions, "limit": 3 if field.startswith("reference_") else 1,
@@ -1270,7 +1288,7 @@ class WebTaskRunner:
                 }
                 for image_index, _ in enumerate(task["image_paths"])
             ]
-            if task["model_family"] in MEAICC_D_MODELS:
+            if task["model_family"] in REFERENCE_MEDIA_MODELS:
                 media_types = {"reference_videos": "reference_video", "reference_audios": "reference_voice",
                                "first_image": "first_frame", "last_image": "last_frame"}
                 for field, config in get_media_upload_limits(task["model_family"]).items():
@@ -2344,15 +2362,25 @@ def upload_too_large(error):
     return jsonify({"error": "上传文件总大小不能超过 512 MB，请减少文件数量或压缩后重试"}), 413
 
 
+@app.get("/api/channel-availability")
+def channel_availability():
+    response = jsonify(AVAILABILITY_SERVICE.snapshot(force=request.args.get("refresh") == "1"))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.get("/api/models")
 def models():
     model_data = []
     for item in MODEL_OPTIONS:
         model_family = item["value"]
+        provider_host = urlparse(get_backend_config(model_family)["api_base"]).hostname
+        provider_name = {"api.meaicc.com": "MEAICC", "api.sudashuiapi.com": "苏打水", "api.aiclub.cv": "AIClub", "zexitongxue.com": "泽熙同学"}.get(provider_host, "客易云")
         model_data.append(
             {
                 "label": item["label"],
                 "value": model_family,
+                "provider_name": provider_name,
                 "max_images": get_max_images_for_model(model_family),
                 "min_images": 0 if model_family in REFERENCE_MEDIA_MODELS else (1 if get_max_images_for_model(model_family) else 0),
                 "supports_reference_media": model_family in REFERENCE_MEDIA_MODELS,

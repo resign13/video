@@ -52,9 +52,9 @@ onUnmounted(() => clearInterval(timer))
 </script>
 
 <template>
-  <section class="usage-panel">
+  <section class="data-panel usage-panel">
     <div class="usage-heading">
-      <div><h2>生成用量记录</h2><p>保留 3 个月，视频文件清理后记录仍会保留。Key 默认脱敏显示。</p></div>
+      <div><h2>使用概览</h2><p>保留 3 个月，视频文件清理后记录仍会保留。Key 默认脱敏显示。</p></div>
       <button class="ghost small" :disabled="loading" @click="load()">{{ loading ? '加载中…' : '刷新' }}</button>
     </div>
     <form class="usage-filters" @submit.prevent="load(true)">
@@ -73,7 +73,7 @@ onUnmounted(() => clearInterval(timer))
     <p v-if="error" class="error">{{ error }}</p>
     <div class="usage-table-wrap">
       <table class="usage-table">
-        <thead><tr><th>提交时间</th><th>渠道 / 模型</th><th>使用的 Key</th><th>设定秒数</th><th>实际秒数</th><th>费用消耗</th><th>状态</th><th>任务 ID</th></tr></thead>
+        <thead><tr><th scope="col">提交时间</th><th scope="col">渠道 / 模型</th><th scope="col">使用的 Key</th><th scope="col">设定秒数</th><th scope="col">实际秒数</th><th scope="col">费用消耗</th><th scope="col">状态</th><th scope="col">任务 ID</th></tr></thead>
         <tbody>
           <tr v-for="record in records" :key="record.task_id">
             <td :title="`记录保留至 ${dateText(record.expires_ts)}`">{{ dateText(record.created_ts) }}</td>
@@ -94,28 +94,28 @@ onUnmounted(() => clearInterval(timer))
 </template>
 
 <style scoped>
-.usage-panel { margin-top: 10px; height: calc(100vh - 82px); overflow: auto; border: 1px solid #30313b; border-radius: 14px; background: #1a1a20; padding: 20px; }
+.usage-panel { }
 .usage-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 h2 { margin: 0; font-size: 20px; }
-p, .usage-note, small { color: #a6a7b7; }
+p, .usage-note, small { color: var(--muted); }
 .usage-heading p { margin: 8px 0 18px; }
 .usage-filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
 .usage-filters label { display: grid; gap: 6px; font-size: 12px; min-width: 150px; }
-.usage-filters input, .usage-filters select { min-height: 36px; border: 1px solid #363848; background: #101117; border-radius: 9px; color: #f4f4f7; padding: 8px 10px; }
+.usage-filters input, .usage-filters select { min-height: 48px; border: 1px solid #8994a8; background: var(--surface); border-radius: 9px; color: var(--text); padding: 8px 10px; }
 .usage-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
-.usage-summary > div { border: 1px solid #333541; border-radius: 12px; padding: 16px; background: #23232d; display: grid; gap: 8px; }
-.usage-summary span { color: #a6a7b7; font-size: 12px; }
+.usage-summary > div { border: 1px solid var(--border); border-radius: 12px; padding: 16px; background: var(--soft); display: grid; gap: 8px; }
+.usage-summary span { color: var(--muted); font-size: 12px; }
 .usage-summary strong { font-size: 19px; overflow-wrap: anywhere; }
 .usage-note { font-size: 12px; margin: 14px 0; }
-.usage-table-wrap { overflow: auto; border: 1px solid #333541; border-radius: 10px; }
+.usage-table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
 .usage-table { border-collapse: collapse; width: 100%; min-width: 1000px; font-size: 12px; }
-th { color: #b7b8c6; background: #24252e; font-weight: 600; text-align: left; white-space: nowrap; }
-th, td { padding: 12px; border-bottom: 1px solid #30313d; }
+th { color: var(--muted); background: var(--soft); font-weight: 600; text-align: left; white-space: nowrap; }
+th, td { padding: 12px; border-bottom: 1px solid var(--border); }
 td { vertical-align: top; }
 td small { display: block; margin-top: 5px; }
 td:last-child code { display: block; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.usage-empty { padding: 50px 20px; text-align: center; color: #a6a7b7; }
+.usage-empty { padding: 50px 20px; text-align: center; color: var(--muted); }
 .usage-pagination { display: flex; gap: 10px; align-items: center; justify-content: flex-end; margin-top: 16px; font-size: 12px; }
-.usage-pagination span { margin-right: auto; color: #a6a7b7; }
+.usage-pagination span { margin-right: auto; color: var(--muted); }
 @media (max-width: 700px) { .usage-panel { padding: 12px; } .usage-summary { grid-template-columns: 1fr; } .usage-filters label { flex: 1; min-width: 130px; } }
 </style>
